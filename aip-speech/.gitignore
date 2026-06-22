@@ -1,0 +1,62 @@
+# ── Data (source corpora, raw downloads) ──────────────────────────────────────
+data/
+!data/.gitkeep
+
+# ── Models / HF cache ─────────────────────────────────────────────────────────
+models/
+.cache/
+huggingface/
+transformers_cache/
+
+# ── Inference outputs ─────────────────────────────────────────────────────────
+inference/
+!inference/.gitkeep
+
+# ── Results / figures ─────────────────────────────────────────────────────────
+results/
+!results/.gitkeep
+
+# ── Checks (mix_diagnostics, inspection wavs) ─────────────────────────────────
+checks/mix_diagnostics.csv
+checks/inspection/
+checks/bg_presence.csv
+checks/wer_constancy.csv
+checks/scramble_validity.csv
+
+# ── Descriptors (generated parquet) ───────────────────────────────────────────
+descriptors/battery.parquet
+
+# ── Item banks & manifests (generated) ────────────────────────────────────────
+itembanks/
+!itembanks/.gitkeep
+manifests/
+!manifests/.gitkeep
+
+# ── Pre-registration (KEEP — frozen after Day 2) ──────────────────────────────
+# prereg/prereg.json  → tracked intentionally
+
+# ── Python artefacts ──────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Virtual environments ───────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── Jupyter ───────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── Editor / OS ───────────────────────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~

@@ -1,0 +1,352 @@
+#!/usr/bin/env python3
+"""
+03_curate_battery.py — Stage 3: curate backgrounds, build scrambled twins,
+extract descriptors, freeze pre-registration.
+
+Produces:
+  data/bg/             ~20 curated mono 16 kHz WAVs (trimmed/looped, normalised)
+  data/bg_scrambled/   8 phase-scrambled twins of the speech-like backgrounds
+  descriptors/battery.parquet
+  prereg/prereg.json
+
+Usage:
+  python scripts/03_curate_battery.py --smoke-test   # 3 backgrounds only
+  python scripts/03_curate_battery.py                # full run (resumable)
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+import soundfile as sf
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from utils import (ROOT, DATA, SR, SPEECH_LUFS, BG_LUFS, SNR_GRID,
+                   get_logger, ProgressLog, load_audio, loudness_normalize)
+
+log = get_logger("03_curate_battery")
+PROGRESS = ROOT / "checks" / "battery_progress.json"
+BG_DIR   = DATA / "bg"
+BGS_DIR  = DATA / "bg_scrambled"
+BATTERY  = ROOT / "descriptors" / "battery.parquet"
+PREREG   = ROOT / "prereg" / "prereg.json"
+
+# ── Battery definition (source → id, category) ───────────────────────────────
+# Each entry: (bg_id, source_glob_pattern, category)
+# source_glob_pattern is relative to DATA
+BATTERY_SPEC: list[tuple[str, str, str]] = [
+    # ESC-50 non-speech events (~12)
+    ("esc_rain",       "esc50/ESC-50-master/audio/1-*-A-17.wav",  "non_speech"),  # rain
+    ("esc_seawave",    "esc50/ESC-50-master/audio/1-*-A-10.wav",  "non_speech"),  # sea_waves
+    ("esc_engine",     "esc50/ESC-50-master/audio/1-*-A-40.wav",  "non_speech"),  # car_engine
+    ("esc_vacuum",     "esc50/ESC-50-master/audio/1-*-A-38.wav",  "non_speech"),  # vacuum_cleaner
+    ("esc_footsteps",  "esc50/ESC-50-master/audio/1-*-A-23.wav",  "non_speech"),  # footsteps
+    ("esc_fire",       "esc50/ESC-50-master/audio/1-*-A-12.wav",  "non_speech"),  # crackling_fire
+    ("esc_helicopter", "esc50/ESC-50-master/audio/1-*-A-47.wav",  "non_speech"),  # helicopter
+    ("esc_clock",      "esc50/ESC-50-master/audio/1-*-A-26.wav",  "non_speech"),  # clock_tick
+    ("esc_keyboard",   "esc50/ESC-50-master/audio/1-*-A-25.wav",  "non_speech"),  # keyboard
+    ("esc_dog",        "esc50/ESC-50-master/audio/1-*-A-1.wav",   "non_speech"),  # dog
+    ("esc_rooster",    "esc50/ESC-50-master/audio/1-*-A-0.wav",   "non_speech"),  # rooster
+    ("esc_wind",       "esc50/ESC-50-master/audio/1-*-A-11.wav",  "non_speech"),  # wind
+    # DEMAND speech-like environments (~5)
+    ("dem_pcafeter",   "bg_raw/PCAFETER/Ch01.wav",                "speech_like"),
+    ("dem_presto",     "bg_raw/PRESTO/Ch01.wav",                  "speech_like"),
+    ("dem_spsquare",   "bg_raw/SPSQUARE/Ch01.wav",                "speech_like"),
+    ("dem_omeeting",   "bg_raw/OMEETING/Ch01.wav",                "speech_like"),
+    # NOISEX-92 babble
+    ("noisex_babble",  "noisex/babble.wav",                        "speech_like"),
+    # MUSAN music and hubbub
+    ("musan_music",    "musan/musan/music/fma/music-fma-0001.wav", "music"),
+    ("musan_hubbub",   "musan/musan/speech/librivox/speech-librivox-0001.flac", "speech_like"),
+    # Stationary (DEMAND TCAR)
+    ("dem_tcar",       "bg_raw/TCAR/Ch01.wav",                    "stationary"),
+]
+
+# Speech-like subset (for scrambled twins) — must match bg_ids above
+SPEECH_LIKE_IDS = [
+    "dem_pcafeter", "dem_presto", "dem_spsquare", "dem_omeeting",
+    "noisex_babble", "musan_hubbub", "musan_music", "dem_tcar",
+]
+
+CLIP_LEN_S = 30  # seconds to trim/loop each background to
+
+
+# ── audio preparation ─────────────────────────────────────────────────────────
+def _prepare_bg(src_path: Path, out_path: Path) -> np.ndarray | None:
+    """Load, mono, resample, trim/loop to CLIP_LEN_S, loudness-normalise, save."""
+    if not src_path.exists():
+        log.warning(f"  [missing] {src_path}")
+        return None
+    x = load_audio(src_path)
+    target_len = CLIP_LEN_S * SR
+    if len(x) < target_len:
+        x = np.tile(x, int(np.ceil(target_len / len(x))))
+    x = x[:target_len]
+    x = loudness_normalize(x, BG_LUFS)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(str(out_path), x, SR)
+    return x
+
+
+# ── phase scrambling ──────────────────────────────────────────────────────────
+def phase_scramble(x: np.ndarray, seed: int = 0) -> np.ndarray:
+    """
+    Same magnitude spectrum + energy, no temporal structure / linguistic content.
+    From §2.3 of implementation plan.
+    """
+    X = np.fft.rfft(x)
+    mag = np.abs(X)
+    rng = np.random.default_rng(seed)
+    ph = np.exp(1j * rng.uniform(0, 2 * np.pi, size=mag.shape))
+    return np.fft.irfft(mag * ph, n=len(x)).astype(np.float32)
+
+
+# ── descriptor extraction ─────────────────────────────────────────────────────
+def extract_descriptors(x: np.ndarray, bg_id: str) -> dict:
+    """
+    Compute all descriptors defined in §2.4 / Table in proposal §3.
+    Returns a dict suitable for battery.parquet.
+    """
+    import pyloudnorm as pyln
+    import librosa
+
+    desc: dict = {"bg_id": bg_id}
+
+    # loudness (LUFS)
+    meter = pyln.Meter(SR)
+    try:
+        desc["loudness"] = float(meter.integrated_loudness(x))
+    except Exception:
+        desc["loudness"] = float("nan")
+
+    # speech_likeness — P(speech) from webrtcvad or silero VAD
+    desc["speech_likeness"] = _speech_likeness(x)
+
+    # linguistic_content — Whisper word count × mean confidence on bg alone
+    desc["linguistic_content"] = _linguistic_content(x)
+
+    # mod_2to8Hz — temporal envelope modulation energy in 2–8 Hz (syllabic rate)
+    desc["mod_2to8Hz"] = _mod_energy(x, f_lo=2.0, f_hi=8.0)
+
+    # spectral_overlap — energy fraction in 300–3400 Hz (telephone band)
+    desc["spectral_overlap"] = _spectral_overlap(x)
+
+    # harmonicity (HNR)
+    desc["harmonicity"] = _harmonicity(x)
+
+    # stationarity = 1 / mean spectral flux
+    desc["stationarity"] = _stationarity(x)
+
+    # onset_density (onsets per second)
+    onsets = librosa.onset.onset_detect(y=x, sr=SR, units="time")
+    desc["onset_density"] = float(len(onsets) / (len(x) / SR))
+
+    return desc
+
+
+def _speech_likeness(x: np.ndarray) -> float:
+    """Fraction of 30-ms frames classified as speech by energy-VAD proxy."""
+    frame_len = int(0.03 * SR)
+    hop = frame_len
+    frames = [x[i:i+frame_len] for i in range(0, len(x)-frame_len, hop)]
+    if not frames:
+        return 0.0
+    # Simple energy threshold: speech frames have RMS > 1% of max RMS
+    rms = np.array([float(np.sqrt(np.mean(f**2))) for f in frames])
+    thresh = 0.01 * float(rms.max()) if rms.max() > 0 else 0.0
+    return float(np.mean(rms > thresh))
+
+
+def _linguistic_content(x: np.ndarray) -> float:
+    """
+    Run Whisper-base on the background alone.
+    Return confidence-weighted word count (proxy for linguistic content).
+    """
+    try:
+        import whisper
+        model = whisper.load_model("base", download_root=str(ROOT / "models" / "cache" / "whisper"))
+        result = model.transcribe(x, language="en", fp16=False,
+                                   word_timestamps=True)
+        words = []
+        for seg in result.get("segments", []):
+            words.extend(seg.get("words", []))
+        if not words:
+            return 0.0
+        return float(sum(abs(w.get("probability", 0.5)) for w in words))
+    except Exception as e:
+        log.warning(f"  [whisper] failed: {e}")
+        return 0.0
+
+
+def _mod_energy(x: np.ndarray, f_lo: float, f_hi: float) -> float:
+    """Modulation energy of the temporal envelope in [f_lo, f_hi] Hz."""
+    from scipy.signal import butter, sosfilt, hilbert
+    # Temporal envelope via Hilbert
+    env = np.abs(hilbert(x))
+    # Band-pass the envelope
+    sos = butter(4, [f_lo, f_hi], btype="bandpass", fs=SR, output="sos")
+    filtered = sosfilt(sos, env)
+    total = float(np.mean(env**2)) + 1e-9
+    return float(np.mean(filtered**2) / total)
+
+
+def _spectral_overlap(x: np.ndarray) -> float:
+    """Fraction of spectral energy in 300–3400 Hz (telephone speech band)."""
+    import librosa
+    S = np.abs(librosa.stft(x))
+    freqs = librosa.fft_frequencies(sr=SR)
+    mask = (freqs >= 300) & (freqs <= 3400)
+    total = float(np.sum(S**2)) + 1e-9
+    return float(np.sum(S[mask, :]**2) / total)
+
+
+def _harmonicity(x: np.ndarray) -> float:
+    """
+    Harmonic-to-noise ratio proxy: ratio of AC to DC power in autocorrelation.
+    """
+    import librosa
+    f0s, voiced, _ = librosa.pyin(x, fmin=50, fmax=400, sr=SR)
+    voiced_f0 = f0s[voiced & ~np.isnan(f0s)] if voiced is not None else np.array([])
+    return float(np.mean(voiced_f0 > 0)) if len(voiced_f0) > 0 else 0.0
+
+
+def _stationarity(x: np.ndarray) -> float:
+    """1 / mean spectral flux (higher = more stationary)."""
+    import librosa
+    S = np.abs(librosa.stft(x))
+    flux = np.sum(np.diff(S, axis=1)**2, axis=0)
+    mean_flux = float(np.mean(flux)) + 1e-9
+    return 1.0 / mean_flux
+
+
+# ── curate battery ────────────────────────────────────────────────────────────
+def curate_battery(prog: ProgressLog, smoke: bool) -> None:
+    spec = BATTERY_SPEC[:3] if smoke else BATTERY_SPEC
+    records: list[dict] = []
+
+    for bg_id, glob_pattern, category in spec:
+        key = f"curate_{bg_id}"
+        if prog.done(key):
+            log.info(f"[skip] {bg_id} already curated.")
+            # Load cached descriptor if available
+            continue
+
+        src_candidates = sorted(DATA.glob(glob_pattern))
+        if not src_candidates:
+            log.warning(f"[missing src] {bg_id}: no files match data/{glob_pattern}")
+            continue
+        src = src_candidates[0]
+        out = BG_DIR / f"{bg_id}.wav"
+
+        log.info(f"[curate] {bg_id} ← {src.name}")
+        x = _prepare_bg(src, out)
+        if x is None:
+            continue
+
+        log.info(f"[descriptors] {bg_id}")
+        desc = extract_descriptors(x, bg_id)
+        desc["category"] = category
+        desc["source_file"] = str(src.relative_to(DATA))
+        desc["wav"] = str(out.relative_to(ROOT))
+        records.append(desc)
+        prog.mark(key)
+
+    # Build scrambled twins for speech-like backgrounds
+    build_scrambled_twins(prog, smoke)
+
+    # Save battery.parquet
+    if records:
+        import pandas as pd
+        BATTERY.parent.mkdir(parents=True, exist_ok=True)
+        # Merge with existing if present
+        if BATTERY.exists():
+            existing = pd.read_parquet(BATTERY)
+            new_df = pd.DataFrame(records)
+            combined = pd.concat([existing, new_df]).drop_duplicates("bg_id")
+        else:
+            combined = pd.DataFrame(records)
+        combined.to_parquet(BATTERY, index=False)
+        log.info(f"[battery] {len(combined)} backgrounds → {BATTERY}")
+
+    freeze_prereg(smoke)
+
+
+def build_scrambled_twins(prog: ProgressLog, smoke: bool) -> None:
+    ids = SPEECH_LIKE_IDS[:2] if smoke else SPEECH_LIKE_IDS
+    for bg_id in ids:
+        key = f"scramble_{bg_id}"
+        if prog.done(key):
+            log.info(f"[skip] scramble for {bg_id} already done.")
+            continue
+        src = BG_DIR / f"{bg_id}.wav"
+        if not src.exists():
+            log.warning(f"[scramble] source missing: {src}")
+            continue
+        x = load_audio(src)
+        xs = phase_scramble(x, seed=0)
+        xs = loudness_normalize(xs, BG_LUFS)
+        out = BGS_DIR / f"{bg_id}_scrambled.wav"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        sf.write(str(out), xs, SR)
+        log.info(f"[scramble] {bg_id} → {out.name}")
+        prog.mark(key)
+
+
+# ── pre-registration ──────────────────────────────────────────────────────────
+def freeze_prereg(smoke: bool) -> None:
+    if PREREG.exists():
+        log.info("[prereg] Already frozen. Skipping (nothing changes after first model run).")
+        return
+    PREREG.parent.mkdir(parents=True, exist_ok=True)
+    prereg = {
+        "project": "AIP-Speech",
+        "battery_ids": [s[0] for s in (BATTERY_SPEC[:3] if smoke else BATTERY_SPEC)],
+        "speech_like_ids": SPEECH_LIKE_IDS[:2] if smoke else SPEECH_LIKE_IDS,
+        "snr_grid_db": SNR_GRID,
+        "scramble_method": "phase_scramble(seed=0): irfft(|rfft(x)| * exp(i*random_phase))",
+        "scramble_backgrounds": SPEECH_LIKE_IDS[:2] if smoke else SPEECH_LIKE_IDS,
+        "descriptor_definitions": {
+            "speech_likeness":   "Fraction of 30ms frames above energy threshold (VAD proxy)",
+            "linguistic_content":"Whisper-base confidence-weighted word count on background",
+            "mod_2to8Hz":        "Temporal envelope modulation energy ratio in 2-8 Hz band",
+            "spectral_overlap":  "Fraction of spectral energy in 300-3400 Hz",
+            "harmonicity":       "Fraction of voiced frames from pyin F0 estimation",
+            "stationarity":      "1 / mean spectral flux",
+            "onset_density":     "Onset events per second",
+            "loudness":          "Integrated LUFS (pyloudnorm)",
+        },
+        "significance_rule": "Paired permutation test p<0.05 (Bonferroni-corrected across backgrounds); "
+                             "semantic claims require real>scrambled; energetic claims require SNR-monotone.",
+        "metric_definitions": {
+            "DWER":  "WER(noisy) - WER(clean), per item",
+            "FAR":   "False-alarm rate on non-target KWS clips",
+            "BIR":   "Fraction of inserted tokens matching background's own transcript vocabulary",
+            "TIR":   "FAR specifically on injection-probe backgrounds",
+            "DRI":   "(max_g DWER_g - min_g DWER_g) / mean DWER",
+            "RER":   "effect_with_instruction / effect_without",
+        },
+        "smoke_mode": smoke,
+    }
+    PREREG.write_text(json.dumps(prereg, indent=2))
+    log.info(f"[prereg] Frozen → {PREREG}")
+
+
+# ── main ──────────────────────────────────────────────────────────────────────
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Stage 3 — Curate battery, scrambles, descriptors")
+    ap.add_argument("--smoke-test", action="store_true",
+                    help="Process only 3 backgrounds to verify the pipeline.")
+    args = ap.parse_args()
+    if args.smoke_test:
+        log.info("=== SMOKE TEST MODE ===")
+
+    prog = ProgressLog(PROGRESS)
+    curate_battery(prog, smoke=args.smoke_test)
+    log.info("=== Stage 3 complete. ===")
+
+
+if __name__ == "__main__":
+    main()
