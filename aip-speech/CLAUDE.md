@@ -11,7 +11,7 @@
 | Stage | Script | Status | Notes |
 |-------|--------|--------|-------|
 | 0 | `setup.sh` | ✅ written | Install deps via venv + pip |
-| 1 | `scripts/01_download.py` | ✅ written | Download ESC-50, DEMAND, MUSAN, NOISEX, LibriSpeech, SpeechCommands, SAA; resumable |
+| 1 | `scripts/01_download.py` | ✅ written | Download ESC-50, MS-SNSD, MUSAN, NOISEX, LibriSpeech, SpeechCommands, SAA; resumable |
 | 2 | `scripts/02_build_banks.py` | ✅ written | Build ASR/KWS/SAA item banks; CV streamed |
 | 3 | `scripts/03_curate_battery.py` | ✅ written | Curate ~20 backgrounds, scrambled twins, all descriptors, freeze prereg |
 | 4 | `scripts/04_manipulation_checks.py` | ✅ written | bg_presence, wer_constancy, scramble_validity, determinism; materialise inspection sample |
@@ -84,6 +84,8 @@ python scoring/figures.py
 | Date | What |
 |------|------|
 | 2026-06-23 | **Full scaffold written.** All 8 stages scripted from proposal + implementation plan. `utils.py`, `mixing/mix.py`, `scripts/{01–05}`, `scoring/{score_all,analyse,figures}.py`, `setup.sh`, `.gitignore`, `CLAUDE.md`, `results.md` |
+| 2026-06-24 | **MS-SNSD & ESC-50 fixes.** Migrated background noise pipeline from DEMAND to MS-SNSD. Cleaned up DEMAND references, code, and raw data. Fixed ESC-50 category mapping IDs. Reran Stage 2, 3, and 4 to verify correct sound curation. |
+| 2026-06-24 | **Stage 5 Inference fixes.** Fixed device placement/VRAM OOM with BitsAndBytes 4-bit quantization and monkey-patching of `caching_allocator_warmup` to bypass pre-allocation. Handled the tuple return format of Qwen2.5-Omni generator. Successfully completed the Qwen2.5-Omni ASR smoke test. |
 
 ---
 

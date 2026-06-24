@@ -9,12 +9,12 @@
 
 1. **Manifest is metadata only:** `(speech_id, background_id, snr, condition, seed)`. Stimuli are mixed in RAM at inference and discarded — **but any clip is regenerable bit-for-bit on demand** (`materialize`), a fixed inspection sample is persisted, and a per-stimulus diagnostics CSV records what happened.
 2. **Generation ≠ scoring:** models write raw JSONL once; metrics are pure functions of it.
-3. **All backgrounds are named public recordings** (ESC-50, DEMAND, MUSAN, NOISEX) — no synthesized babble. The only construction is SNR mixing per the released manifest.
+3. **All backgrounds are named public recordings** (ESC-50, MS-SNSD, MUSAN, NOISEX) — no synthesized babble. The only construction is SNR mixing per the released manifest.
 
 ```
 aip-speech/
 ├── data/
-│   ├── bg/                  # ~20 curated real backgrounds (ESC-50 + DEMAND + MUSAN + NOISEX)   (~1.8 GB)
+│   ├── bg/                  # ~20 curated real backgrounds (ESC-50 + MS-SNSD + MUSAN + NOISEX)  (~1.8 GB)
 │   ├── bg_scrambled/        # 8 phase-scrambled twins of the speech-like backgrounds            (~50 MB)
 │   ├── speech_asr/          # LibriSpeech subset + Common Voice (streamed, accent-labelled)      (~350 MB)
 │   ├── speech_kws/          # Google Speech Commands v2 subset (+ held-out injection-probe IDs)  (~150 MB)
@@ -42,10 +42,8 @@ Download **subsets**; stream the big one.
 
 ```bash
 git clone https://github.com/karolpiczak/ESC-50 data/esc50           # ~600 MB diverse non-speech
-# DEMAND: fetch 5 environments (real babble/speech-like + 1 stationary)
-for env in PCAFETER PRESTO SPSQUARE OMEETING TCAR; do
-  wget -q "https://zenodo.org/record/1227121/files/${env}.zip" -P data/demand && unzip -q data/demand/${env}.zip -d data/bg_raw
-done
+# MS-SNSD: clone MS-SNSD repository (real babble/speech-like + stationary)
+git clone --depth 1 https://github.com/microsoft/MS-SNSD.git data/ms_snsd
 # NOISEX-92 babble (canonical multi-talker babble), MUSAN speech/music subset — fetch a handful of files
 # LibriSpeech test-clean subset (~350 MB); Speech Commands v2 subset; Speech Accent Archive subset
 python - <<'PY'   # Common Voice: STREAM, do not download the corpus
@@ -67,7 +65,7 @@ itembanks/saa.jsonl : {id, wav, transcript(fixed paragraph), accent, gender}
 ## Stage 2 — Battery, descriptors, scrambles, pre-registration (Day 2)
 
 ### 2.1 Curate ~20 real backgrounds
-From the corpora above: ~12 ESC-50 non-speech events; 5 DEMAND/NOISEX/MUSAN speech-like (PCAFETER, PRESTO, SPSQUARE, OMEETING, NOISEX-babble); 2–3 MUSAN music/hubbub; 1 stationary (TCAR / MUSAN-noise). Take 1 channel, trim/loop to a common length, high-pass DC, loudness-normalize each to a fixed **background reference**.
+From the corpora above: ~12 ESC-50 non-speech events; 5 MS-SNSD/NOISEX/MUSAN speech-like (cafeteria, restaurant, square, office, NOISEX-babble); 2–3 MUSAN music/hubbub; 1 stationary (AirConditioner / MUSAN-noise). Take 1 channel, trim/loop to a common length, high-pass DC, loudness-normalize each to a fixed **background reference**.
 
 ### 2.2 Injection-probe backgrounds (reproducible, no synthesis)
 A **fixed published list of held-out Speech Commands clip IDs** that utter the target keyword/digit; these are mixed as backgrounds at 0 dB. The list of IDs ships in the released manifest → anyone regenerates the identical probes.

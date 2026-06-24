@@ -50,7 +50,7 @@ def jsonl_read(path: Path) -> list[dict]:
         return [json.loads(l) for l in f if l.strip()]
 
 def jsonl_ids(path: Path, key: str = "id") -> set:
-    return {r[key] for r in jsonl_read(path) if key in r}
+    return {r[key] for r in jsonl_read(path) if key in r and r.get("raw") != "__ERROR__"}
 
 # ── CSV helpers ───────────────────────────────────────────────────────────────
 def csv_append(path: Path, row: dict, fieldnames: list[str] | None = None) -> None:

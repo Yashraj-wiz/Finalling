@@ -55,9 +55,9 @@ You were right that summing LibriSpeech speakers into "babble" is hard to reprod
 | Battery slice | Source corpus (citable, downloadable) | Why |
 |---|---|---|
 | **Diverse non-speech events** (~12) | **ESC-50** (50 classes, 5 s, CC) — e.g., rain, sea waves, engine, vacuum, footsteps, fire, helicopter, clock-tick, keyboard, dog, rooster, wind | spans the non-speech descriptor space |
-| **Real multi-talker babble / speech-like** (~5) | **DEMAND** environments PCAFETER (cafeteria), PRESTO (restaurant), SPSQUARE (public square), OMEETING (meeting); **NOISEX-92** *babble* (canteen, the canonical babble) | the crucial speech-like extreme, **recorded, not synthesized** |
+| **Real multi-talker babble / speech-like** (~4) | **MS-SNSD** environments CafeTeria (cafeteria), Restaurant (restaurant), Square (public square), Office (meeting); **NOISEX-92** *babble* (canteen, the canonical babble) | the crucial speech-like extreme, **recorded, not synthesized** |
 | **Speech / hubbub / music anchors** (~3) | **MUSAN** speech (read-speech + hubbub) and music subsets | speech-like + music-with-vocals extremes |
-| **Stationary anchor** (~1) | **MUSAN** noise / DEMAND TCAR | broadband stationary control |
+| **Stationary anchor** (~1) | **MUSAN** noise / MS-SNSD AirConditioner | broadband stationary control |
 
 **Injection probes** (a background that *says a specific word*, for the KWS trigger test) use a **fixed, published list of held-out Google Speech Commands clip IDs** mixed at a fixed SNR — fully reproducible from the released manifest, no synthesis. The released artifact includes exact source IDs + seeds, so every stimulus is regenerable by anyone.
 
@@ -215,7 +215,7 @@ If injection is the most striking result, promote Fig A2 into the main paper and
 
 | Day | Work | Output |
 |---|---|---|
-| 1 | Env; download ESC-50, DEMAND (5 envs), MUSAN subset, NOISEX babble, LibriSpeech + Speech Commands subsets, SAA; **stream** Common Voice; build foreground item banks | sources + JSONL banks |
+| 1 | Env; download ESC-50, MS-SNSD, MUSAN subset, NOISEX babble, LibriSpeech + Speech Commands subsets, SAA; **stream** Common Voice; build foreground item banks | sources + JSONL banks |
 | 2 | Curate ~20 backgrounds; build 8 scrambled twins; extract descriptors; **freeze prereg**; write the on-the-fly **mixer + `materialize()` + diagnostics logger** | battery + descriptors + `prereg/` + mixer |
 | 3 | 5 model adapters (16 GB, 4-bit, understanding-only); manipulation checks on the inspection sample; determinism check | adapters + `checks/` |
 | 4–5 | Run **E1 (ASR + KWS)**, 5 models (the bulk) | `inference/` JSONL |
@@ -271,7 +271,7 @@ If injection is the most striking result, promote Fig A2 into the main paper and
 
 ## Appendix B — Glossary
 
-- **Interference battery** — the shared, manipulated variable: ~20 real background recordings (ESC-50, DEMAND, MUSAN, NOISEX) each with a descriptor vector.
+- **Interference battery** — the shared, manipulated variable: ~20 real background recordings (ESC-50, MS-SNSD, MUSAN, NOISEX) each with a descriptor vector.
 - **Descriptor** — a measurable property of a background (speech-likeness, linguistic content, 2–8 Hz modulation, spectral overlap, stationarity, onset density, loudness).
 - **Scrambled twin** — phase-scrambled / spectrally-matched version of a background (same spectrum & energy, no structure or meaning).
 - **BIR / TIR** — Background-Injection Rate (ASR) / Trigger-Injection Rate (KWS): how much background content leaks into outputs.

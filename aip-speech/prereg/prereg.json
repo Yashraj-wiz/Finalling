@@ -1,0 +1,71 @@
+{
+  "project": "AIP-Speech",
+  "battery_ids": [
+    "esc_rain",
+    "esc_seawave",
+    "esc_engine",
+    "esc_vacuum",
+    "esc_footsteps",
+    "esc_fire",
+    "esc_helicopter",
+    "esc_clock",
+    "esc_keyboard",
+    "esc_dog",
+    "esc_rooster",
+    "esc_wind",
+    "snsd_cafeteria",
+    "snsd_restaurant",
+    "snsd_square",
+    "snsd_office",
+    "noisex_babble",
+    "musan_music",
+    "musan_hubbub",
+    "snsd_airconditioner"
+  ],
+  "speech_like_ids": [
+    "snsd_cafeteria",
+    "snsd_restaurant",
+    "snsd_square",
+    "snsd_office",
+    "noisex_babble",
+    "musan_hubbub",
+    "musan_music",
+    "snsd_airconditioner"
+  ],
+  "snr_grid_db": [
+    10,
+    5,
+    0
+  ],
+  "scramble_method": "phase_scramble(seed=0): irfft(|rfft(x)| * exp(i*random_phase))",
+  "scramble_backgrounds": [
+    "snsd_cafeteria",
+    "snsd_restaurant",
+    "snsd_square",
+    "snsd_office",
+    "noisex_babble",
+    "musan_hubbub",
+    "musan_music",
+    "snsd_airconditioner"
+  ],
+  "descriptor_definitions": {
+    "speech_likeness": "Fraction of 30ms frames above energy threshold (VAD proxy)",
+    "linguistic_content": "Whisper-base confidence-weighted word count on background",
+    "mod_2to8Hz": "Temporal envelope modulation energy ratio in 2-8 Hz band",
+    "spectral_overlap": "Fraction of spectral energy in 300-3400 Hz",
+    "harmonicity": "Fraction of voiced frames from pyin F0 estimation",
+    "stationarity": "1 / mean spectral flux",
+    "onset_density": "Onset events per second",
+    "loudness": "Integrated LUFS (pyloudnorm)"
+  },
+  "significance_rule": "Paired permutation test p<0.05 (Bonferroni-corrected across backgrounds); semantic claims require real>scrambled; energetic claims require SNR-monotone.",
+  "metric_definitions": {
+    "DWER": "WER(noisy) - WER(clean), per item",
+    "FAR": "False-alarm rate on non-target KWS clips",
+    "BIR": "Fraction of inserted tokens matching background's own transcript vocabulary",
+    "TIR": "FAR specifically on injection-probe backgrounds",
+    "DRI": "(max_g DWER_g - min_g DWER_g) / mean DWER",
+    "RER": "effect_with_instruction / effect_without"
+  },
+  "smoke_mode": false
+}

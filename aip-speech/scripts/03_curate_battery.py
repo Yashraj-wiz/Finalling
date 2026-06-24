@@ -39,36 +39,37 @@ PREREG   = ROOT / "prereg" / "prereg.json"
 # source_glob_pattern is relative to DATA
 BATTERY_SPEC: list[tuple[str, str, str]] = [
     # ESC-50 non-speech events (~12)
-    ("esc_rain",       "esc50/ESC-50-master/audio/1-*-A-17.wav",  "non_speech"),  # rain
-    ("esc_seawave",    "esc50/ESC-50-master/audio/1-*-A-10.wav",  "non_speech"),  # sea_waves
-    ("esc_engine",     "esc50/ESC-50-master/audio/1-*-A-40.wav",  "non_speech"),  # car_engine
-    ("esc_vacuum",     "esc50/ESC-50-master/audio/1-*-A-38.wav",  "non_speech"),  # vacuum_cleaner
-    ("esc_footsteps",  "esc50/ESC-50-master/audio/1-*-A-23.wav",  "non_speech"),  # footsteps
-    ("esc_fire",       "esc50/ESC-50-master/audio/1-*-A-12.wav",  "non_speech"),  # crackling_fire
-    ("esc_helicopter", "esc50/ESC-50-master/audio/1-*-A-47.wav",  "non_speech"),  # helicopter
-    ("esc_clock",      "esc50/ESC-50-master/audio/1-*-A-26.wav",  "non_speech"),  # clock_tick
-    ("esc_keyboard",   "esc50/ESC-50-master/audio/1-*-A-25.wav",  "non_speech"),  # keyboard
-    ("esc_dog",        "esc50/ESC-50-master/audio/1-*-A-1.wav",   "non_speech"),  # dog
-    ("esc_rooster",    "esc50/ESC-50-master/audio/1-*-A-0.wav",   "non_speech"),  # rooster
-    ("esc_wind",       "esc50/ESC-50-master/audio/1-*-A-11.wav",  "non_speech"),  # wind
-    # DEMAND speech-like environments (~5)
-    ("dem_pcafeter",   "bg_raw/PCAFETER/Ch01.wav",                "speech_like"),
-    ("dem_presto",     "bg_raw/PRESTO/Ch01.wav",                  "speech_like"),
-    ("dem_spsquare",   "bg_raw/SPSQUARE/Ch01.wav",                "speech_like"),
-    ("dem_omeeting",   "bg_raw/OMEETING/Ch01.wav",                "speech_like"),
+    # Category IDs verified against data/esc50/meta/esc50.csv
+    ("esc_rain",       "esc50/**/audio/1-*-A-10.wav",  "non_speech"),  # rain          → ID 10
+    ("esc_seawave",    "esc50/**/audio/1-*-A-11.wav",  "non_speech"),  # sea_waves     → ID 11
+    ("esc_engine",     "esc50/**/audio/1-*-A-44.wav",  "non_speech"),  # engine        → ID 44
+    ("esc_vacuum",     "esc50/**/audio/1-*-A-36.wav",  "non_speech"),  # vacuum_cleaner→ ID 36
+    ("esc_footsteps",  "esc50/**/audio/1-*-A-25.wav",  "non_speech"),  # footsteps     → ID 25
+    ("esc_fire",       "esc50/**/audio/1-*-A-12.wav",  "non_speech"),  # crackling_fire→ ID 12
+    ("esc_helicopter", "esc50/**/audio/1-*-A-40.wav",  "non_speech"),  # helicopter    → ID 40
+    ("esc_clock",      "esc50/**/audio/1-*-A-38.wav",  "non_speech"),  # clock_tick    → ID 38
+    ("esc_keyboard",   "esc50/**/audio/1-*-A-32.wav",  "non_speech"),  # keyboard_typing→ ID 32
+    ("esc_dog",        "esc50/**/audio/1-*-A-0.wav",   "non_speech"),  # dog           → ID 0
+    ("esc_rooster",    "esc50/**/audio/1-*-A-1.wav",   "non_speech"),  # rooster       → ID 1
+    ("esc_wind",       "esc50/**/audio/1-*-A-16.wav",  "non_speech"),  # wind          → ID 16
+    # MS-SNSD speech-like environments (~4)
+    ("snsd_cafeteria", "ms_snsd/noise_train/CafeTeria_1.wav",     "speech_like"),
+    ("snsd_restaurant","ms_snsd/noise_train/Restaurant_1.wav",    "speech_like"),
+    ("snsd_square",    "ms_snsd/noise_train/Square_1.wav",        "speech_like"),
+    ("snsd_office",    "ms_snsd/noise_train/Office_1.wav",        "speech_like"),
     # NOISEX-92 babble
     ("noisex_babble",  "noisex/babble.wav",                        "speech_like"),
     # MUSAN music and hubbub
-    ("musan_music",    "musan/musan/music/fma/music-fma-0001.wav", "music"),
-    ("musan_hubbub",   "musan/musan/speech/librivox/speech-librivox-0001.flac", "speech_like"),
-    # Stationary (DEMAND TCAR)
-    ("dem_tcar",       "bg_raw/TCAR/Ch01.wav",                    "stationary"),
+    ("musan_music",    "musan/**/music/fma/music-fma-0001.wav", "music"),
+    ("musan_hubbub",   "musan/**/speech/librivox/speech-librivox-0001.*", "speech_like"),
+    # Stationary (MS-SNSD AirConditioner)
+    ("snsd_airconditioner", "ms_snsd/noise_train/AirConditioner_1.wav", "stationary"),
 ]
 
 # Speech-like subset (for scrambled twins) — must match bg_ids above
 SPEECH_LIKE_IDS = [
-    "dem_pcafeter", "dem_presto", "dem_spsquare", "dem_omeeting",
-    "noisex_babble", "musan_hubbub", "musan_music", "dem_tcar",
+    "snsd_cafeteria", "snsd_restaurant", "snsd_square", "snsd_office",
+    "noisex_babble", "musan_hubbub", "musan_music", "snsd_airconditioner",
 ]
 
 CLIP_LEN_S = 30  # seconds to trim/loop each background to

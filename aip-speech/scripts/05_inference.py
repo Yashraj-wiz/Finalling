@@ -15,6 +15,41 @@ Usage:
 """
 from __future__ import annotations
 
+import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+import transformers.modeling_utils
+transformers.modeling_utils.caching_allocator_warmup = lambda *args, **kwargs: None
+
+# Global Compatibility Monkey-patches
+try:
+    import peft.utils.other
+    import peft.tuners.tuners_utils
+    def patched_set_layer_requires_grad(layer, should_require_grad):
+        for param in layer.parameters():
+            if param.dtype.is_floating_point:
+                try:
+                    param.requires_grad_(should_require_grad)
+                except Exception:
+                    pass
+            else:
+                try:
+                    param.requires_grad_(False)
+                except Exception:
+                    pass
+    peft.utils.other._set_layer_requires_grad = patched_set_layer_requires_grad
+    peft.tuners.tuners_utils._set_layer_requires_grad = patched_set_layer_requires_grad
+except ImportError:
+    pass
+
+try:
+    import transformers.cache_utils
+    def _get_usable_length(self, seq_length: int, *args, **kwargs):
+        return seq_length
+    transformers.cache_utils.DynamicCache.get_usable_length = _get_usable_length
+except (ImportError, AttributeError):
+    pass
+
+
 import argparse
 import gc
 import json
@@ -37,7 +72,7 @@ MANIFESTS  = ROOT / "manifests"
 INFER_DIR  = ROOT / "inference"
 PROGRESS   = ROOT / "checks" / "inference_progress.json"
 
-SMOKE_N = 3   # items per (model, task) in smoke mode
+SMOKE_N = 2   # items per (model, task) in smoke mode
 
 # ── task prompts ──────────────────────────────────────────────────────────────
 PROMPTS = {
@@ -79,16 +114,23 @@ class Qwen25Omni3B(SpeechLLM):
 
     def __init__(self):
         import torch
-        from transformers import AutoProcessor, Qwen2_5OmniForConditionalGeneration
+        from transformers import AutoProcessor, Qwen2_5OmniForConditionalGeneration, BitsAndBytesConfig
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.processor = AutoProcessor.from_pretrained(
             "Qwen/Qwen2.5-Omni-3B", cache_dir=_cache(), trust_remote_code=True)
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True
+        )
         self.model = Qwen2_5OmniForConditionalGeneration.from_pretrained(
             "Qwen/Qwen2.5-Omni-3B",
             cache_dir=_cache(),
-            torch_dtype="auto",
-            device_map=self.device,
+            quantization_config=quantization_config,
+            device_map="auto",
             trust_remote_code=True,
+            attn_implementation="sdpa",
         )
         self.model.eval()
 
@@ -96,7 +138,58 @@ class Qwen25Omni3B(SpeechLLM):
                  system_prompt: str | None = None, max_new_tokens: int = 64) -> str:
         import torch
         messages = [{"role": "user", "content": [
-            {"type": "audio", "audio": wav.tolist()},
+            {"type": "audio"},
+            {"type": "text",  "text": task_prompt},
+        ]}]
+        text = self.processor.apply_chat_template(messages, add_generation_prompt=True)
+        inputs = self.processor(text=text, audio=wav, sampling_rate=SR,
+                                return_tensors="pt").to(self.device)
+        with torch.no_grad():
+            out_ids = self.model.generate(**inputs, max_new_tokens=max_new_tokens,
+                                          do_sample=False)
+        if isinstance(out_ids, tuple):
+            out_ids = out_ids[0]
+        out = out_ids[:, inputs["input_ids"].shape[1]:]
+        return self.processor.decode(out[0], skip_special_tokens=True).strip()
+
+    def unload(self):
+        import torch
+        del self.model, self.processor
+        gc.collect()
+        torch.cuda.empty_cache()
+
+
+# ── Qwen2-Audio-7B (4-bit) ───────────────────────────────────────────────────
+class Qwen2Audio7B(SpeechLLM):
+    model_id = "qwen2_audio_7b"
+
+    def __init__(self):
+        import torch
+        from transformers import AutoProcessor, Qwen2AudioForConditionalGeneration, BitsAndBytesConfig
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.processor = AutoProcessor.from_pretrained(
+            "Qwen/Qwen2-Audio-7B-Instruct", cache_dir=_cache(), trust_remote_code=True)
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True
+        )
+        self.model = Qwen2AudioForConditionalGeneration.from_pretrained(
+            "Qwen/Qwen2-Audio-7B-Instruct",
+            cache_dir=_cache(),
+            quantization_config=quantization_config,
+            device_map="auto",
+            trust_remote_code=True,
+            attn_implementation="sdpa",
+        )
+        self.model.eval()
+
+    def generate(self, wav: np.ndarray, task_prompt: str,
+                 system_prompt: str | None = None, max_new_tokens: int = 64) -> str:
+        import torch
+        messages = [{"role": "user", "content": [
+            {"type": "audio", "audio_url": "__local__"},
             {"type": "text",  "text": task_prompt},
         ]}]
         text = self.processor.apply_chat_template(messages, add_generation_prompt=True)
@@ -111,50 +204,8 @@ class Qwen25Omni3B(SpeechLLM):
     def unload(self):
         import torch
         del self.model, self.processor
-        torch.cuda.empty_cache()
         gc.collect()
-
-
-# ── Qwen2-Audio-7B (4-bit) ───────────────────────────────────────────────────
-class Qwen2Audio7B(SpeechLLM):
-    model_id = "qwen2_audio_7b"
-
-    def __init__(self):
-        import torch
-        from transformers import AutoProcessor, Qwen2AudioForConditionalGeneration
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.processor = AutoProcessor.from_pretrained(
-            "Qwen/Qwen2-Audio-7B-Instruct", cache_dir=_cache(), trust_remote_code=True)
-        self.model = Qwen2AudioForConditionalGeneration.from_pretrained(
-            "Qwen/Qwen2-Audio-7B-Instruct",
-            cache_dir=_cache(),
-            load_in_4bit=True,
-            device_map="auto",
-            trust_remote_code=True,
-        )
-        self.model.eval()
-
-    def generate(self, wav: np.ndarray, task_prompt: str,
-                 system_prompt: str | None = None, max_new_tokens: int = 64) -> str:
-        import torch
-        messages = [{"role": "user", "content": [
-            {"type": "audio", "audio_url": "__local__"},
-            {"type": "text",  "text": task_prompt},
-        ]}]
-        text = self.processor.apply_chat_template(messages, add_generation_prompt=True)
-        inputs = self.processor(text=text, audios=wav, sampling_rate=SR,
-                                return_tensors="pt").to(self.device)
-        with torch.no_grad():
-            out_ids = self.model.generate(**inputs, max_new_tokens=max_new_tokens,
-                                          do_sample=False)
-        out = out_ids[:, inputs["input_ids"].shape[1]:]
-        return self.processor.decode(out[0], skip_special_tokens=True).strip()
-
-    def unload(self):
-        import torch
-        del self.model, self.processor
         torch.cuda.empty_cache()
-        gc.collect()
 
 
 # ── Phi-4-multimodal (4-bit) ─────────────────────────────────────────────────
@@ -163,15 +214,28 @@ class Phi4Multimodal(SpeechLLM):
 
     def __init__(self):
         import torch
-        from transformers import AutoProcessor, AutoModelForCausalLM
+        from transformers import AutoProcessor, AutoModelForCausalLM, AutoConfig, BitsAndBytesConfig
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.processor = AutoProcessor.from_pretrained(
             "microsoft/phi-4-multimodal-instruct", cache_dir=_cache(),
             trust_remote_code=True)
-        self.model = AutoModelForCausalLM.from_pretrained(
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True
+        )
+        config = AutoConfig.from_pretrained(
             "microsoft/phi-4-multimodal-instruct",
             cache_dir=_cache(),
-            load_in_4bit=True,
+            trust_remote_code=True,
+        )
+        config._attn_implementation = "sdpa"
+        self.model = AutoModelForCausalLM.from_pretrained(
+            "microsoft/phi-4-multimodal-instruct",
+            config=config,
+            cache_dir=_cache(),
+            quantization_config=quantization_config,
             device_map="auto",
             trust_remote_code=True,
         )
@@ -192,8 +256,8 @@ class Phi4Multimodal(SpeechLLM):
     def unload(self):
         import torch
         del self.model, self.processor
-        torch.cuda.empty_cache()
         gc.collect()
+        torch.cuda.empty_cache()
 
 
 # ── Gemma 3n-E4B ─────────────────────────────────────────────────────────────
@@ -202,14 +266,20 @@ class Gemma3nE4B(SpeechLLM):
 
     def __init__(self):
         import torch
-        from transformers import AutoProcessor, AutoModelForImageTextToText
+        from transformers import AutoProcessor, AutoModelForImageTextToText, BitsAndBytesConfig
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.processor = AutoProcessor.from_pretrained(
             "google/gemma-3n-E4B-it", cache_dir=_cache(), trust_remote_code=True)
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True
+        )
         self.model = AutoModelForImageTextToText.from_pretrained(
             "google/gemma-3n-E4B-it",
             cache_dir=_cache(),
-            torch_dtype="auto",
+            quantization_config=quantization_config,
             device_map="auto",
             trust_remote_code=True,
         )
@@ -234,8 +304,8 @@ class Gemma3nE4B(SpeechLLM):
     def unload(self):
         import torch
         del self.model, self.processor
-        torch.cuda.empty_cache()
         gc.collect()
+        torch.cuda.empty_cache()
 
 
 # ── Kimi-Audio-7B (4-bit) ────────────────────────────────────────────────────
@@ -276,8 +346,8 @@ class KimiAudio7B(SpeechLLM):
     def unload(self):
         import torch
         del self.model, self.processor
-        torch.cuda.empty_cache()
         gc.collect()
+        torch.cuda.empty_cache()
 
 
 # Registry
@@ -416,7 +486,7 @@ def vram_dry_run(model: SpeechLLM) -> None:
 
 
 # ── inference loop ────────────────────────────────────────────────────────────
-def run_inference(model_id: str, task: str, smoke: bool) -> None:
+def run_inference_with_model(model: SpeechLLM, model_id: str, task: str, smoke: bool) -> None:
     prog = ProgressLog(PROGRESS)
     run_key = f"{model_id}_{task}"
 
@@ -441,56 +511,40 @@ def run_inference(model_id: str, task: str, smoke: bool) -> None:
 
     log.info(f"[infer] {model_id} / {task}: {len(remaining)} rows remaining.")
 
-    # Load model
-    cls = MODEL_CLASSES.get(model_id)
-    if cls is None:
-        log.error(f"Unknown model: {model_id}")
-        return
-    try:
-        model = cls()
-        log.info(f"[model] {model_id} loaded.")
-        vram_dry_run(model)
-    except Exception as e:
-        log.error(f"[model] Failed to load {model_id}: {e}")
-        return
-
     prompt = PROMPTS.get(task, PROMPTS["asr"])
     battery = {b["bg_id"]: b for b in _load_battery()}
 
-    try:
-        for _, row in remaining.iterrows():
-            try:
-                sp = load_audio(ROOT / row["speech_path"])
-                bg_id = row["background_id"]
-                if row["condition"] == "clean" or bg_id == "clean":
-                    bg = None
-                else:
-                    bg_wav_rel = battery.get(bg_id, {}).get("wav", "")
-                    bg = load_audio(ROOT / bg_wav_rel) if bg_wav_rel else None
+    for _, row in remaining.iterrows():
+        try:
+            sp = load_audio(ROOT / row["speech_path"])
+            bg_id = row["background_id"]
+            if row["condition"] == "clean" or bg_id == "clean":
+                bg = None
+            else:
+                bg_wav_rel = battery.get(bg_id, {}).get("wav", "")
+                bg = load_audio(ROOT / bg_wav_rel) if bg_wav_rel else None
 
-                wav = mix(sp, bg, float(row["snr_db"]), int(row["seed"]))
-                diag_row = dict(row)
-                diag_row["id"] = row["id"]
-                diag_row["condition"] = row.get("condition", "noisy")
-                diagnostics(diag_row, wav, sp)
+            wav = mix(sp, bg, float(row["snr_db"]), int(row["seed"]))
+            diag_row = dict(row)
+            diag_row["id"] = row["id"]
+            diag_row["condition"] = row.get("condition", "noisy")
+            diagnostics(diag_row, wav, sp)
 
-                raw = model.generate(wav, prompt)
-                out_row = {
-                    **{k: row[k] for k in row.index},
-                    "raw": raw,
-                    "model": model_id,
-                    "task": task,
-                }
-                jsonl_append(out_path, out_row)
-            except Exception as e:
-                log.warning(f"[infer] Error on {row['id']}: {e}")
-                jsonl_append(out_path, {
-                    "id": row["id"], "raw": "__ERROR__", "error": str(e),
-                    "model": model_id, "task": task,
-                })
-    finally:
-        model.unload()
-        log.info(f"[infer] {model_id} unloaded.")
+            raw = model.generate(wav, prompt)
+            log.info(f"[save] {model_id} / {task} - {row['id']} -> '{raw}' saved to {out_path.relative_to(ROOT)}")
+            out_row = {
+                **{k: row[k] for k in row.index},
+                "raw": raw,
+                "model": model_id,
+                "task": task,
+            }
+            jsonl_append(out_path, out_row)
+        except Exception as e:
+            log.warning(f"[error] {model_id} / {task} - {row['id']}: {e}")
+            jsonl_append(out_path, {
+                "id": row["id"], "raw": "__ERROR__", "error": str(e),
+                "model": model_id, "task": task,
+            })
 
     log.info(f"[done] {run_key} → {out_path}")
 
@@ -516,9 +570,45 @@ def main() -> None:
     tasks  = ALL_TASKS  if args.task  == "all" else [args.task]
 
     for model_id in models:
+        # Filter tasks that actually have remaining work for this model
+        tasks_to_run = []
         for task in tasks:
-            log.info(f"=== {model_id} / {task} ===")
-            run_inference(model_id, task, smoke=args.smoke_test)
+            manifest_file = MANIFESTS / f"{'asr' if 'asr' in task else 'kws'}.csv"
+            if manifest_file.exists():
+                import pandas as pd
+                manifest = pd.read_csv(manifest_file)
+                if args.smoke_test:
+                    manifest = manifest.head(SMOKE_N)
+                out_path = INFER_DIR / model_id / f"{task}.jsonl"
+                done = jsonl_ids(out_path)
+                remaining = manifest[~manifest["id"].isin(done)]
+                if not remaining.empty:
+                    tasks_to_run.append(task)
+
+        if not tasks_to_run:
+            log.info(f"[skip] {model_id}: all tasks already complete.")
+            continue
+
+        log.info(f"=== Loading model: {model_id} ===")
+        cls = MODEL_CLASSES.get(model_id)
+        if cls is None:
+            log.error(f"Unknown model: {model_id}")
+            continue
+        try:
+            model = cls()
+            log.info(f"[model] {model_id} loaded.")
+            vram_dry_run(model)
+        except Exception as e:
+            log.error(f"[model] Failed to load {model_id}: {e}")
+            continue
+
+        try:
+            for task in tasks_to_run:
+                log.info(f"=== {model_id} / {task} ===")
+                run_inference_with_model(model, model_id, task, smoke=args.smoke_test)
+        finally:
+            model.unload()
+            log.info(f"[infer] {model_id} unloaded.")
 
     log.info("=== Stage 5 complete. ===")
 

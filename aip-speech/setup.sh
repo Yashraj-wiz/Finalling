@@ -36,7 +36,7 @@ pip install --quiet \
 echo "[setup] Python packages installed."
 
 # ── 3. Ensure local data/cache directories exist ─────────────────────────────
-mkdir -p "$DATA"/{bg,bg_raw,bg_scrambled,speech_asr,speech_kws,speech_saa,esc50,demand,musan,noisex}
+mkdir -p "$DATA"/{bg,bg_raw,bg_scrambled,speech_asr,speech_kws,speech_saa,esc50,ms_snsd,musan,noisex}
 mkdir -p "$ROOT"/{descriptors,itembanks,prereg,manifests,inference,scoring,results}
 mkdir -p "$ROOT"/checks/inspection
 mkdir -p "$CACHE"

@@ -11,17 +11,16 @@ transformers_cache/
 # ── Inference outputs ─────────────────────────────────────────────────────────
 inference/
 !inference/.gitkeep
+inference_backup/
+inference_run.log
 
 # ── Results / figures ─────────────────────────────────────────────────────────
 results/
 !results/.gitkeep
 
 # ── Checks (mix_diagnostics, inspection wavs) ─────────────────────────────────
-checks/mix_diagnostics.csv
-checks/inspection/
-checks/bg_presence.csv
-checks/wer_constancy.csv
-checks/scramble_validity.csv
+checks/
+!checks/.gitkeep
 
 # ── Descriptors (generated parquet) ───────────────────────────────────────────
 descriptors/battery.parquet
@@ -32,7 +31,12 @@ itembanks/
 manifests/
 !manifests/.gitkeep
 
+# ── Scratch space ─────────────────────────────────────────────────────────────
+scratch/
+
 # ── Pre-registration (KEEP — frozen after Day 2) ──────────────────────────────
+prereg/*
+!prereg/prereg.json
 # prereg/prereg.json  → tracked intentionally
 
 # ── Python artefacts ──────────────────────────────────────────────────────────
