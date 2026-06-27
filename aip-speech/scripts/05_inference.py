@@ -227,17 +227,12 @@ class Phi4Multimodal(SpeechLLM):
 
     def __init__(self):
         import torch
-        from transformers import AutoProcessor, AutoModelForCausalLM, AutoConfig, BitsAndBytesConfig
+        from transformers import AutoProcessor, AutoModelForCausalLM, AutoConfig
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.processor = AutoProcessor.from_pretrained(
             "microsoft/phi-4-multimodal-instruct", cache_dir=_cache(),
             trust_remote_code=True)
-        quantization_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.float16,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True
-        )
+        
         config = AutoConfig.from_pretrained(
             "microsoft/phi-4-multimodal-instruct",
             cache_dir=_cache(),
@@ -248,7 +243,7 @@ class Phi4Multimodal(SpeechLLM):
             "microsoft/phi-4-multimodal-instruct",
             config=config,
             cache_dir=_cache(),
-            quantization_config=quantization_config,
+            torch_dtype=torch.bfloat16,
             device_map="auto",
             trust_remote_code=True,
         )
@@ -257,7 +252,8 @@ class Phi4Multimodal(SpeechLLM):
     def generate(self, wav: np.ndarray, task_prompt: str,
                  system_prompt: str | None = None, max_new_tokens: int = 64) -> str:
         import torch
-        prompt = f"<|user|><|audio_1|>{task_prompt}<|end|><|assistant|>"
+        messages = [{"role": "user", "content": f"<|audio_1|>{task_prompt}"}]
+        prompt = self.processor.apply_chat_template(messages, add_generation_prompt=True)
         wav = _clip_audio(wav)
         inputs = self.processor(text=prompt, audios=[(wav, SR)],
                                 return_tensors="pt").to(self.device)
@@ -328,44 +324,52 @@ class KimiAudio7B(SpeechLLM):
 
     def __init__(self):
         import torch
-        from transformers import AutoProcessor, AutoModel, BitsAndBytesConfig
+        import sys
+        
+        kimi_path = ROOT / "Kimi-Audio"
+        if str(kimi_path) not in sys.path:
+            sys.path.append(str(kimi_path))
+            
+        from kimia_infer.api.kimia import KimiAudio
+        
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.processor = AutoProcessor.from_pretrained(
-            "moonshotai/Kimi-Audio-7B-Instruct", cache_dir=_cache(),
-            trust_remote_code=True)
-        quantization_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.float16,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True
+        self.model = KimiAudio(
+            model_path="moonshotai/Kimi-Audio-7B-Instruct",
+            load_detokenizer=True,
         )
-        self.model = AutoModel.from_pretrained(
-            "moonshotai/Kimi-Audio-7B-Instruct",
-            cache_dir=_cache(),
-            quantization_config=quantization_config,
-            device_map="auto",
-            trust_remote_code=True,
-        )
-        self.model.eval()
 
     def generate(self, wav: np.ndarray, task_prompt: str,
                  system_prompt: str | None = None, max_new_tokens: int = 64) -> str:
-        import torch
-        # Kimi defaults to ASR; force the task via the prompt
-        messages = [{"role": "user", "content": [
-            {"type": "audio", "audio": _clip_audio(wav), "sampling_rate": SR},
-            {"type": "text",  "text": task_prompt},
-        ]}]
-        inputs = self.processor(messages, return_tensors="pt").to(self.device)
-        with torch.no_grad():
-            out_ids = self.model.generate(**inputs, max_new_tokens=max_new_tokens,
-                                          do_sample=False)
-        out = out_ids[:, inputs["input_ids"].shape[1]:]
-        return self.processor.decode(out[0], skip_special_tokens=True).strip()
+        import soundfile as sf
+        import tempfile
+        import os
+        
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            temp_wav = f.name
+            
+        try:
+            wav = _clip_audio(wav)
+            sf.write(temp_wav, wav, SR)
+            
+            messages = [
+                {"role": "user", "message_type": "audio", "content": temp_wav},
+                {"role": "user", "message_type": "text", "content": task_prompt}
+            ]
+            
+            sampling_params = {
+                "text_temperature": 0.0,
+                "text_top_k": 1,
+            }
+            
+            _, text = self.model.generate(messages, **sampling_params, output_type="text")
+            return str(text).strip()
+        finally:
+            if os.path.exists(temp_wav):
+                os.remove(temp_wav)
 
     def unload(self):
         import torch
-        del self.model, self.processor
+        del self.model
         gc.collect()
         torch.cuda.empty_cache()
 

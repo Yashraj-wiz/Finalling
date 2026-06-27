@@ -16,7 +16,7 @@
 | 3 | `scripts/03_curate_battery.py` | ✅ written | Curate ~20 backgrounds, scrambled twins, all descriptors, freeze prereg |
 | 4 | `scripts/04_manipulation_checks.py` | ✅ written | bg_presence, wer_constancy, scramble_validity, determinism; materialise inspection sample |
 | 5 | `scripts/05_inference.py` | ✅ written | All 5 model adapters; one-at-a-time GPU; row-by-row JSONL; resumable |
-| 6 | `scoring/score_all.py` | ✅ written | WER/CER/FAR/Miss/BIR/TIR/DRI/RER scoring for all experiments |
+| 6 | `scripts/06_score_metrics.py` | ✅ written | WER/CER/FAR/Miss/BIR/TIR/DRI/RER scoring for all experiments |
 | 7 | `scoring/analyse.py` | ✅ written | C-PROFILE OLS regression + bootstrap CI + VIF; C-FAIR permutation test; C-INJECT |
 | 8 | `scoring/figures.py` | ✅ written | Figs 1–3 (main paper) + Figs A1–A5 (appendix) as PDF+PNG |
 
@@ -62,8 +62,8 @@ python scripts/05_inference.py --model all --task all               # full sweep
 
 ### Stage 6 — Scoring
 ```bash
-python scoring/score_all.py --smoke-test
-python scoring/score_all.py
+python scripts/06_score_metrics.py --smoke-test
+python scripts/06_score_metrics.py
 ```
 
 ### Stage 7 — Analysis
@@ -86,6 +86,7 @@ python scoring/figures.py
 | 2026-06-23 | **Full scaffold written.** All 8 stages scripted from proposal + implementation plan. `utils.py`, `mixing/mix.py`, `scripts/{01–05}`, `scoring/{score_all,analyse,figures}.py`, `setup.sh`, `.gitignore`, `CLAUDE.md`, `results.md` |
 | 2026-06-24 | **MS-SNSD & ESC-50 fixes.** Migrated background noise pipeline from DEMAND to MS-SNSD. Cleaned up DEMAND references, code, and raw data. Fixed ESC-50 category mapping IDs. Reran Stage 2, 3, and 4 to verify correct sound curation. |
 | 2026-06-24 | **Stage 5 Inference fixes.** Fixed device placement/VRAM OOM with BitsAndBytes 4-bit quantization and monkey-patching of `caching_allocator_warmup` to bypass pre-allocation. Handled the tuple return format of Qwen2.5-Omni generator. Successfully completed the Qwen2.5-Omni ASR smoke test. |
+| 2026-06-28 | **Inference & Metrics scoring update.** Added audio duration clipping (30s max), recovery from CUDA OOM, and custom quantization configuration for Kimi in `05_inference.py`. Replaced `scoring/score_all.py` with `scripts/06_score_metrics.py` to evaluate E1-E4. |
 
 ---
 

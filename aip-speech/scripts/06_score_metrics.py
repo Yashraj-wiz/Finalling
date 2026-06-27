@@ -45,12 +45,28 @@ def _all_models() -> list[str]:
     return sorted(d.name for d in INFER.iterdir() if d.is_dir())
 
 
+import re
+
+def _clean_hyp(hyp: str) -> str:
+    hyp = str(hyp).strip()
+    if hyp == "__ERROR__":
+        return hyp
+    # Strip common Qwen2-Audio preambles
+    hyp = re.sub(r"^(The transcription of the speech is|The speech transcribed from the audio is|The keyword is|The word is)[^:]*:\s*['\"]?", "", hyp, flags=re.IGNORECASE)
+    # Also remove trailing quotes if we removed a leading quote
+    if hyp.endswith("'") or hyp.endswith('"'):
+        hyp = hyp[:-1]
+    return hyp.strip()
+
 def _load_inference(model_id: str, task: str) -> pd.DataFrame:
     path = INFER / model_id / f"{task}.jsonl"
     if not path.exists():
         return pd.DataFrame()
     rows = jsonl_read(path)
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    if "raw" in df.columns:
+        df["raw"] = df["raw"].apply(_clean_hyp)
+    return df
 
 
 def _load_battery() -> pd.DataFrame:
