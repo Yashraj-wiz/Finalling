@@ -92,6 +92,9 @@ PROMPTS = {
 
 
 # ── model adapters ────────────────────────────────────────────────────────────
+# Max audio length to prevent KV-cache OOM on 16 GB GPU
+MAX_AUDIO_SAMPLES = SR * 30   # 30 seconds
+
 class SpeechLLM:
     """Abstract adapter. Subclasses implement _load() and generate()."""
     model_id: str
@@ -106,6 +109,14 @@ class SpeechLLM:
 
 def _cache() -> str:
     return str(ROOT / "models" / "cache" / "hub")
+
+
+def _clip_audio(wav: np.ndarray) -> np.ndarray:
+    """Truncate audio to MAX_AUDIO_SAMPLES to avoid KV-cache OOM."""
+    if len(wav) > MAX_AUDIO_SAMPLES:
+        log.warning(f"[clip] Truncating audio from {len(wav)/SR:.1f}s to {MAX_AUDIO_SAMPLES/SR:.0f}s")
+        return wav[:MAX_AUDIO_SAMPLES]
+    return wav
 
 
 # ── Qwen2.5-Omni-3B (Thinker-only) ──────────────────────────────────────────
@@ -142,11 +153,12 @@ class Qwen25Omni3B(SpeechLLM):
             {"type": "text",  "text": task_prompt},
         ]}]
         text = self.processor.apply_chat_template(messages, add_generation_prompt=True)
+        wav = _clip_audio(wav)
         inputs = self.processor(text=text, audio=wav, sampling_rate=SR,
                                 return_tensors="pt").to(self.device)
         with torch.no_grad():
             out_ids = self.model.generate(**inputs, max_new_tokens=max_new_tokens,
-                                          do_sample=False)
+                                          do_sample=False, return_audio=False)
         if isinstance(out_ids, tuple):
             out_ids = out_ids[0]
         out = out_ids[:, inputs["input_ids"].shape[1]:]
@@ -193,6 +205,7 @@ class Qwen2Audio7B(SpeechLLM):
             {"type": "text",  "text": task_prompt},
         ]}]
         text = self.processor.apply_chat_template(messages, add_generation_prompt=True)
+        wav = _clip_audio(wav)
         inputs = self.processor(text=text, audio=wav, sampling_rate=SR,
                                 return_tensors="pt").to(self.device)
         with torch.no_grad():
@@ -245,6 +258,7 @@ class Phi4Multimodal(SpeechLLM):
                  system_prompt: str | None = None, max_new_tokens: int = 64) -> str:
         import torch
         prompt = f"<|user|><|audio_1|>{task_prompt}<|end|><|assistant|>"
+        wav = _clip_audio(wav)
         inputs = self.processor(text=prompt, audios=[(wav, SR)],
                                 return_tensors="pt").to(self.device)
         with torch.no_grad():
@@ -289,7 +303,7 @@ class Gemma3nE4B(SpeechLLM):
                  system_prompt: str | None = None, max_new_tokens: int = 64) -> str:
         import torch
         messages = [{"role": "user", "content": [
-            {"type": "audio", "audio": wav},
+            {"type": "audio", "audio": _clip_audio(wav)},
             {"type": "text",  "text": task_prompt},
         ]}]
         inputs = self.processor.apply_chat_template(
@@ -314,15 +328,21 @@ class KimiAudio7B(SpeechLLM):
 
     def __init__(self):
         import torch
-        from transformers import AutoProcessor, AutoModel
+        from transformers import AutoProcessor, AutoModel, BitsAndBytesConfig
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.processor = AutoProcessor.from_pretrained(
             "moonshotai/Kimi-Audio-7B-Instruct", cache_dir=_cache(),
             trust_remote_code=True)
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True
+        )
         self.model = AutoModel.from_pretrained(
             "moonshotai/Kimi-Audio-7B-Instruct",
             cache_dir=_cache(),
-            load_in_4bit=True,
+            quantization_config=quantization_config,
             device_map="auto",
             trust_remote_code=True,
         )
@@ -333,7 +353,7 @@ class KimiAudio7B(SpeechLLM):
         import torch
         # Kimi defaults to ASR; force the task via the prompt
         messages = [{"role": "user", "content": [
-            {"type": "audio", "audio": wav, "sampling_rate": SR},
+            {"type": "audio", "audio": _clip_audio(wav), "sampling_rate": SR},
             {"type": "text",  "text": task_prompt},
         ]}]
         inputs = self.processor(messages, return_tensors="pt").to(self.device)
@@ -545,6 +565,12 @@ def run_inference_with_model(model: SpeechLLM, model_id: str, task: str, smoke: 
                 "id": row["id"], "raw": "__ERROR__", "error": str(e),
                 "model": model_id, "task": task,
             })
+            # Clear CUDA cache after OOM so subsequent rows don't cascade-fail
+            if "CUDA out of memory" in str(e) or "OutOfMemoryError" in type(e).__name__:
+                import torch
+                gc.collect()
+                torch.cuda.empty_cache()
+                log.info(f"[recovery] Cleared CUDA cache after OOM on {row['id']}")
 
     log.info(f"[done] {run_key} → {out_path}")
 
