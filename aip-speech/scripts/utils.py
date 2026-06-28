@@ -90,6 +90,10 @@ class ProgressLog:
     Use to record completed IDs so a script can resume after interruption.
     """
     def __init__(self, path: Path):
+        # Automatically redirect to a separate smoke progress file if running a smoke test
+        # to avoid contaminating full runs.
+        if "--smoke-test" in sys.argv:
+            path = path.with_name(path.stem + "_smoke" + path.suffix)
         self.path = path
         path.parent.mkdir(parents=True, exist_ok=True)
         self._data: dict = json.loads(path.read_text()) if path.exists() else {}

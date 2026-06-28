@@ -25,8 +25,22 @@
 ## Commands
 
 ### Environment setup
+Create and activate a virtual environment, then run the setup script:
+
+**Linux / macOS:**
 ```bash
-bash setup.sh
+python3 -m venv .venv
+source .venv/bin/activate
+python setup.py
+# (Alternative: bash setup.sh)
+```
+
+**Windows:**
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1   # PowerShell
+# or: .\.venv\Scripts\activate.bat   # CMD
+python setup.py
 ```
 
 ### Stage 1 — Download (smoke test)

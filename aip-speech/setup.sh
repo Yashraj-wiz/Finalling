@@ -21,17 +21,12 @@ source "$VENV/bin/activate"
 # ── 2. Core Python deps ───────────────────────────────────────────────────────
 pip install --quiet --upgrade pip
 
-pip install --quiet \
-  torch torchaudio \
-  transformers accelerate bitsandbytes \
-  soundfile librosa pyloudnorm numpy scipy \
-  openai-whisper \
-  jiwer \
-  pandas pyarrow \
-  datasets huggingface_hub \
-  statsmodels \
-  matplotlib seaborn \
-  tqdm requests
+if [ -f "$ROOT/requirements.txt" ]; then
+  pip install --quiet -r "$ROOT/requirements.txt"
+else
+  echo "[setup] ERROR: requirements.txt not found!"
+  exit 1
+fi
 
 echo "[setup] Python packages installed."
 
