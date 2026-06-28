@@ -230,9 +230,22 @@ def curate_battery(prog: ProgressLog, smoke: bool) -> None:
 
     for bg_id, glob_pattern, category in spec:
         key = f"curate_{bg_id}"
+        out = BG_DIR / f"{bg_id}.wav"
+
         if prog.done(key):
-            log.info(f"[skip] {bg_id} already curated.")
-            # Load cached descriptor if available
+            # Already processed — reload WAV from disk and recompute descriptors
+            # so the parquet is always complete even on re-runs.
+            if out.exists():
+                log.info(f"[reload] {bg_id} already curated — reloading descriptors from disk.")
+                x = load_audio(out)
+                desc = extract_descriptors(x, bg_id)
+                src_candidates = sorted(DATA.glob(glob_pattern))
+                desc["category"] = category
+                desc["source_file"] = str(src_candidates[0].relative_to(DATA)) if src_candidates else ""
+                desc["wav"] = str(out.relative_to(ROOT))
+                records.append(desc)
+            else:
+                log.warning(f"[skip] {bg_id} marked done but WAV missing at {out}. Re-run to fix.")
             continue
 
         src_candidates = sorted(DATA.glob(glob_pattern))
@@ -240,7 +253,6 @@ def curate_battery(prog: ProgressLog, smoke: bool) -> None:
             log.warning(f"[missing src] {bg_id}: no files match data/{glob_pattern}")
             continue
         src = src_candidates[0]
-        out = BG_DIR / f"{bg_id}.wav"
 
         log.info(f"[curate] {bg_id} ← {src.name}")
         x = _prepare_bg(src, out)
@@ -258,21 +270,18 @@ def curate_battery(prog: ProgressLog, smoke: bool) -> None:
     # Build scrambled twins for speech-like backgrounds
     build_scrambled_twins(prog, smoke)
 
-    # Save battery.parquet
+    # Save battery.parquet — always write even if records came from cache
     if records:
         import pandas as pd
         BATTERY.parent.mkdir(parents=True, exist_ok=True)
-        # Merge with existing if present
-        if BATTERY.exists():
-            existing = pd.read_parquet(BATTERY)
-            new_df = pd.DataFrame(records)
-            combined = pd.concat([existing, new_df]).drop_duplicates("bg_id")
-        else:
-            combined = pd.DataFrame(records)
+        combined = pd.DataFrame(records).drop_duplicates("bg_id")
         combined.to_parquet(BATTERY, index=False)
         log.info(f"[battery] {len(combined)} backgrounds → {BATTERY}")
+    else:
+        log.warning("[battery] No records collected — battery.parquet not written.")
 
     freeze_prereg(smoke)
+
 
 
 def build_scrambled_twins(prog: ProgressLog, smoke: bool) -> None:

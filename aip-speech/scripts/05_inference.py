@@ -125,18 +125,59 @@ class Qwen25Omni3B(SpeechLLM):
 
     def __init__(self):
         import torch
-        from transformers import AutoProcessor, Qwen2_5OmniForConditionalGeneration, BitsAndBytesConfig
+        from transformers import AutoProcessor, Qwen2_5OmniForConditionalGeneration
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.processor = AutoProcessor.from_pretrained(
             "Qwen/Qwen2.5-Omni-3B", cache_dir=_cache(), trust_remote_code=True)
-        quantization_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.float16,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True
-        )
         self.model = Qwen2_5OmniForConditionalGeneration.from_pretrained(
             "Qwen/Qwen2.5-Omni-3B",
+            cache_dir=_cache(),
+            torch_dtype=torch.float16,
+            device_map="auto",
+            trust_remote_code=True,
+            attn_implementation="sdpa",
+        )
+        self.model.eval()
+
+    def generate(self, wav: np.ndarray, task_prompt: str,
+                 system_prompt: str | None = None, max_new_tokens: int = 64) -> str:
+        import torch
+        messages = [{"role": "user", "content": [
+            {"type": "audio"},
+            {"type": "text",  "text": task_prompt},
+        ]}]
+        text = self.processor.apply_chat_template(messages, add_generation_prompt=True)
+        wav = _clip_audio(wav)
+        inputs = self.processor(text=text, audio=wav, sampling_rate=SR,
+                                return_tensors="pt").to(self.device)
+        with torch.no_grad():
+            out_ids = self.model.generate(**inputs, max_new_tokens=max_new_tokens,
+                                          do_sample=False, return_audio=False)
+        if isinstance(out_ids, tuple):
+            out_ids = out_ids[0]
+        out = out_ids[:, inputs["input_ids"].shape[1]:]
+        return self.processor.decode(out[0], skip_special_tokens=True).strip()
+
+    def unload(self):
+        import torch
+        del self.model, self.processor
+        gc.collect()
+        torch.cuda.empty_cache()
+
+
+# ── Qwen2.5-Omni-7B (Thinker-only, 8-bit) ────────────────────────────────────
+class Qwen25Omni7B(SpeechLLM):
+    model_id = "qwen25_omni_7b"
+
+    def __init__(self):
+        import torch
+        from transformers import AutoProcessor, Qwen2_5OmniForConditionalGeneration, BitsAndBytesConfig
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.processor = AutoProcessor.from_pretrained(
+            "Qwen/Qwen2.5-Omni-7B", cache_dir=_cache(), trust_remote_code=True)
+        quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+        self.model = Qwen2_5OmniForConditionalGeneration.from_pretrained(
+            "Qwen/Qwen2.5-Omni-7B",
             cache_dir=_cache(),
             quantization_config=quantization_config,
             device_map="auto",
@@ -171,26 +212,20 @@ class Qwen25Omni3B(SpeechLLM):
         torch.cuda.empty_cache()
 
 
-# ── Qwen2-Audio-7B (4-bit) ───────────────────────────────────────────────────
+# ── Qwen2-Audio-7B (fp16) ────────────────────────────────────────────────────
 class Qwen2Audio7B(SpeechLLM):
     model_id = "qwen2_audio_7b"
 
     def __init__(self):
         import torch
-        from transformers import AutoProcessor, Qwen2AudioForConditionalGeneration, BitsAndBytesConfig
+        from transformers import AutoProcessor, Qwen2AudioForConditionalGeneration
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.processor = AutoProcessor.from_pretrained(
             "Qwen/Qwen2-Audio-7B-Instruct", cache_dir=_cache(), trust_remote_code=True)
-        quantization_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.float16,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True
-        )
         self.model = Qwen2AudioForConditionalGeneration.from_pretrained(
             "Qwen/Qwen2-Audio-7B-Instruct",
             cache_dir=_cache(),
-            quantization_config=quantization_config,
+            torch_dtype=torch.float16,
             device_map="auto",
             trust_remote_code=True,
             attn_implementation="sdpa",
@@ -276,20 +311,14 @@ class Gemma3nE4B(SpeechLLM):
 
     def __init__(self):
         import torch
-        from transformers import AutoProcessor, AutoModelForImageTextToText, BitsAndBytesConfig
+        from transformers import AutoProcessor, AutoModelForImageTextToText
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.processor = AutoProcessor.from_pretrained(
             "google/gemma-3n-E4B-it", cache_dir=_cache(), trust_remote_code=True)
-        quantization_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.float16,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True
-        )
         self.model = AutoModelForImageTextToText.from_pretrained(
             "google/gemma-3n-E4B-it",
             cache_dir=_cache(),
-            quantization_config=quantization_config,
+            torch_dtype=torch.float16,
             device_map="auto",
             trust_remote_code=True,
         )
@@ -377,6 +406,7 @@ class KimiAudio7B(SpeechLLM):
 # Registry
 MODEL_CLASSES: dict[str, type[SpeechLLM]] = {
     "qwen25_omni_3b":  Qwen25Omni3B,
+    "qwen25_omni_7b":  Qwen25Omni7B,
     "qwen2_audio_7b":  Qwen2Audio7B,
     "phi4_multimodal": Phi4Multimodal,
     "gemma3n_e4b":     Gemma3nE4B,

@@ -2,7 +2,7 @@
 
 > **Project:** AIP-Speech — Acoustic Interference Profiling for Speech-LLMs
 > **Target venue:** IMPACT-SPEECH @ EMNLP 2026 (4-page short, 15 Jul 2026 AoE)
-> **Compute:** Single 16 GB GPU, inference-only, ~10 days
+> **Compute:** Single 24 GB GPU, inference-only, ~10 days
 
 ---
 
@@ -15,7 +15,7 @@
 | 2 | `scripts/02_build_banks.py` | ✅ written | Build ASR/KWS/SAA item banks; CV streamed |
 | 3 | `scripts/03_curate_battery.py` | ✅ written | Curate ~20 backgrounds, scrambled twins, all descriptors, freeze prereg |
 | 4 | `scripts/04_manipulation_checks.py` | ✅ written | bg_presence, wer_constancy, scramble_validity, determinism; materialise inspection sample |
-| 5 | `scripts/05_inference.py` | ✅ written | All 5 model adapters; one-at-a-time GPU; row-by-row JSONL; resumable |
+| 5 | `scripts/05_inference.py` | ✅ written | All **6** model adapters (+ Qwen2.5-Omni-7B); 8-bit/fp16 precision; one-at-a-time GPU; row-by-row JSONL; resumable |
 | 6 | `scripts/06_score_metrics.py` | ✅ written | WER/CER/FAR/Miss/BIR/TIR/DRI/RER scoring for all experiments |
 | 7 | `scoring/analyse.py` | ✅ written | C-PROFILE OLS regression + bootstrap CI + VIF; C-FAIR permutation test; C-INJECT |
 | 8 | `scoring/figures.py` | ✅ written | Figs 1–3 (main paper) + Figs A1–A5 (appendix) as PDF+PNG |
@@ -71,7 +71,8 @@ python scripts/04_manipulation_checks.py
 ```bash
 python scripts/05_inference.py --model qwen25_omni_3b --task asr --smoke-test
 python scripts/05_inference.py --model qwen25_omni_3b --task asr   # one model/task
-python scripts/05_inference.py --model all --task all               # full sweep
+python scripts/05_inference.py --model qwen25_omni_7b --task asr   # 7B within-family contrast
+python scripts/05_inference.py --model all --task all               # full sweep (6 models)
 ```
 
 ### Stage 6 — Scoring
@@ -101,6 +102,7 @@ python scoring/figures.py
 | 2026-06-24 | **MS-SNSD & ESC-50 fixes.** Migrated background noise pipeline from DEMAND to MS-SNSD. Cleaned up DEMAND references, code, and raw data. Fixed ESC-50 category mapping IDs. Reran Stage 2, 3, and 4 to verify correct sound curation. |
 | 2026-06-24 | **Stage 5 Inference fixes.** Fixed device placement/VRAM OOM with BitsAndBytes 4-bit quantization and monkey-patching of `caching_allocator_warmup` to bypass pre-allocation. Handled the tuple return format of Qwen2.5-Omni generator. Successfully completed the Qwen2.5-Omni ASR smoke test. |
 | 2026-06-28 | **Inference & Metrics scoring update.** Added audio duration clipping (30s max), recovery from CUDA OOM, and custom quantization configuration for Kimi in `05_inference.py`. Replaced `scoring/score_all.py` with `scripts/06_score_metrics.py` to evaluate E1-E4. |
+| 2026-06-28 | **24 GB upgrade — precision & model roster.** Switched all models from 4-bit NF4 → fp16/8-bit (per `AIP_Speech_24GB_Updates.md`). Added `Qwen2.5-Omni-7B` (8-bit, Thinker-only) as within-family capacity contrast. Fixed `03_curate_battery.py` bug where `battery.parquet` was not written on re-runs (descriptors now reloaded from existing WAVs). Fixed smoke-test progress contamination via separate `*_smoke.json` progress files. Cross-platform setup via `setup.py` + `requirements.txt`. |
 
 ---
 
