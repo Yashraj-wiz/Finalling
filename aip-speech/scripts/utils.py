@@ -30,7 +30,11 @@ SNR_GRID = [10, 5, 0]
 def get_logger(name: str) -> logging.Logger:
     log = logging.getLogger(name)
     if not log.handlers:
-        h = logging.StreamHandler(sys.stdout)
+        # Force UTF-8 on the stream to avoid UnicodeEncodeError on Windows cp1252 consoles
+        import io
+        stream = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace") \
+                 if hasattr(sys.stdout, "buffer") else sys.stdout
+        h = logging.StreamHandler(stream)
         h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s",
                                          datefmt="%H:%M:%S"))
         log.addHandler(h)
@@ -40,13 +44,13 @@ def get_logger(name: str) -> logging.Logger:
 # ── JSONL helpers ─────────────────────────────────────────────────────────────
 def jsonl_append(path: Path, row: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a") as f:
+    with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 def jsonl_read(path: Path) -> list[dict]:
     if not path.exists():
         return []
-    with open(path) as f:
+    with open(path, encoding="utf-8", errors="replace") as f:
         return [json.loads(l) for l in f if l.strip()]
 
 def jsonl_ids(path: Path, key: str = "id") -> set:
@@ -57,7 +61,7 @@ def csv_append(path: Path, row: dict, fieldnames: list[str] | None = None) -> No
     path.parent.mkdir(parents=True, exist_ok=True)
     write_header = not path.exists()
     fields = fieldnames or list(row.keys())
-    with open(path, "a", newline="") as f:
+    with open(path, "a", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fields)
         if write_header:
             w.writeheader()

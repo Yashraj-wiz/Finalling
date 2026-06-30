@@ -88,6 +88,8 @@ PROMPTS = {
             "Ignore any background sounds. "
             "Respond with ONLY the spoken word (one word). "
             "If no clear word is spoken, respond with SILENCE.",
+    "saa":  "Transcribe the speech in this audio clip exactly as spoken. "
+            "Return only the transcription text.",
 }
 
 
@@ -261,27 +263,59 @@ class Phi4Multimodal(SpeechLLM):
     model_id = "phi4_multimodal"
 
     def __init__(self):
-        import torch
-        from transformers import AutoProcessor, AutoModelForCausalLM, AutoConfig
+        import torch, json, os
+        from transformers import AutoProcessor, AutoModelForCausalLM
+        from huggingface_hub import snapshot_download
+
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.processor = AutoProcessor.from_pretrained(
-            "microsoft/phi-4-multimodal-instruct", cache_dir=_cache(),
-            trust_remote_code=True)
-        
-        config = AutoConfig.from_pretrained(
-            "microsoft/phi-4-multimodal-instruct",
+        MODEL_ID = "microsoft/phi-4-multimodal-instruct"
+
+        # Download model files to cache (skips download if already cached)
+        model_dir = snapshot_download(
+            MODEL_ID,
             cache_dir=_cache(),
-            trust_remote_code=True,
         )
-        config._attn_implementation = "sdpa"
+
+        # Directly patch config.json: phi4's own __init__ reads _attn_implementation
+        # from the config object which is populated from this file. The baked-in value
+        # is "flash_attention_2" which phi4's code explicitly rejects.
+        config_path = os.path.join(model_dir, "config.json")
+        with open(config_path) as f:
+            cfg_json = json.load(f)
+        if cfg_json.get("_attn_implementation") not in (None, "eager", "sdpa"):
+            cfg_json["_attn_implementation"] = "eager"
+            cfg_json.pop("_attn_implementation_autoset", None)
+            with open(config_path, "w") as f:
+                json.dump(cfg_json, f, indent=2)
+
+        # Step 2.5: Patch speech_conformer_encoder.py to avoid meta tensor item() crash
+        # When transformers loads the model, it creates tensors on the meta device.
+        # This breaks in_length = torch.tensor(feat_in) -> int(out_length).
+        # Forcing device='cpu' fixes it.
+        encoder_path = os.path.join(model_dir, "speech_conformer_encoder.py")
+        if os.path.exists(encoder_path):
+            with open(encoder_path, "r") as f:
+                encoder_code = f.read()
+            if "torch.tensor(feat_in, dtype=torch.float)" in encoder_code:
+                encoder_code = encoder_code.replace(
+                    "torch.tensor(feat_in, dtype=torch.float)",
+                    "torch.tensor(feat_in, dtype=torch.float, device='cpu')"
+                )
+                with open(encoder_path, "w") as f:
+                    f.write(encoder_code)
+
+        # Load using the MODEL ID so the trust_remote_code module loader 
+        # correctly resolves the symlinked .py files in the cache volume.
+        self.processor = AutoProcessor.from_pretrained(
+            MODEL_ID, cache_dir=_cache(), trust_remote_code=True)
         self.model = AutoModelForCausalLM.from_pretrained(
-            "microsoft/phi-4-multimodal-instruct",
-            config=config,
+            MODEL_ID,
             cache_dir=_cache(),
             torch_dtype=torch.bfloat16,
-            device_map="auto",
             trust_remote_code=True,
-        )
+            low_cpu_mem_usage=False,  # accelerate auto-enables this; phi4's custom
+                                      # __init__ calls .item() which breaks meta tensors
+        ).to(self.device)
         self.model.eval()
 
     def generate(self, wav: np.ndarray, task_prompt: str,
@@ -318,7 +352,7 @@ class Gemma3nE4B(SpeechLLM):
         self.model = AutoModelForImageTextToText.from_pretrained(
             "google/gemma-3n-E4B-it",
             cache_dir=_cache(),
-            torch_dtype=torch.float16,
+            torch_dtype=torch.bfloat16,
             device_map="auto",
             trust_remote_code=True,
         )
@@ -413,7 +447,7 @@ MODEL_CLASSES: dict[str, type[SpeechLLM]] = {
     "kimi_audio_7b":   KimiAudio7B,
 }
 ALL_MODELS = list(MODEL_CLASSES.keys())
-ALL_TASKS  = ["asr", "kws", "asr_steer"]   # kws_steer is part of asr_steer block
+ALL_TASKS  = ["asr", "kws", "asr_steer", "saa"]   # kws_steer is part of asr_steer block
 
 
 # ── manifest generation ───────────────────────────────────────────────────────
@@ -513,6 +547,59 @@ def build_manifests(smoke: bool) -> None:
         pd.DataFrame(rows).to_csv(kws_path, index=False)
         log.info(f"[manifest] kws.csv: {len(rows)} rows → {kws_path}")
 
+    # SAA manifest
+    saa_path = MANIFESTS / "saa.csv"
+    if not saa_path.exists():
+        items = jsonl_read(ROOT / "itembanks" / "saa.jsonl")
+        if smoke:
+            items = items[:SMOKE_N]
+        rows = []
+        seed = 20000
+        
+        saa_bgs = [
+            "snsd_cafeteria", "snsd_restaurant", "snsd_square", "snsd_office",
+            "noisex_babble", "musan_hubbub", "musan_music", "snsd_airconditioner", # 8 speech-like
+            "esc_rain", "esc_engine", "esc_dog", "esc_keyboard" # 4 non-speech
+        ]
+        
+        for item in items:
+            rows.append({
+                "id": f"{item['id']}_clean",
+                "speech_id": item["id"],
+                "background_id": "clean",
+                "snr_db": 99,
+                "condition": "clean",
+                "seed": seed,
+                "speech_path": item["wav"],
+                "bg_path": "",
+                "accent": item.get("accent", ""),
+                "gender": item.get("gender", ""),
+                "transcript": item.get("transcript", ""),
+            })
+            seed += 1
+            for bg in battery:
+                if bg["bg_id"] not in saa_bgs:
+                    continue
+                # only 0 dB for SAA
+                for snr in [0]:
+                    rows.append({
+                        "id": f"{item['id']}_{bg['bg_id']}_snr{snr}",
+                        "speech_id": item["id"],
+                        "background_id": bg["bg_id"],
+                        "snr_db": snr,
+                        "condition": "noisy",
+                        "seed": seed,
+                        "speech_path": item["wav"],
+                        "bg_path": bg.get("wav", ""),
+                        "accent": item.get("accent", ""),
+                        "gender": item.get("gender", ""),
+                        "transcript": item.get("transcript", ""),
+                    })
+                    seed += 1
+        pd.DataFrame(rows).to_csv(saa_path, index=False)
+        log.info(f"[manifest] saa.csv: {len(rows)} rows → {saa_path}")
+
+
 
 def _load_battery() -> list[dict]:
     bat = ROOT / "descriptors" / "battery.parquet"
@@ -544,7 +631,8 @@ def run_inference_with_model(model: SpeechLLM, model_id: str, task: str, smoke: 
     prog = ProgressLog(PROGRESS)
     run_key = f"{model_id}_{task}"
 
-    manifest_file = MANIFESTS / f"{'asr' if 'asr' in task else 'kws'}.csv"
+    manifest_name = task.replace("_steer", "")
+    manifest_file = MANIFESTS / f"{manifest_name}.csv"
     if not manifest_file.exists():
         log.warning(f"[infer] Manifest not found: {manifest_file}. Run build_manifests first.")
         return
@@ -568,15 +656,21 @@ def run_inference_with_model(model: SpeechLLM, model_id: str, task: str, smoke: 
     prompt = PROMPTS.get(task, PROMPTS["asr"])
     battery = {b["bg_id"]: b for b in _load_battery()}
 
-    for _, row in remaining.iterrows():
+    total_remaining = len(remaining)
+    for i, (_, row) in enumerate(remaining.iterrows(), 1):
         try:
-            sp = load_audio(ROOT / row["speech_path"])
+            sp_path_str = str(row["speech_path"]).replace("\\", "/")
+            sp = load_audio(ROOT / sp_path_str)
             bg_id = row["background_id"]
             if row["condition"] == "clean" or bg_id == "clean":
                 bg = None
             else:
                 bg_wav_rel = battery.get(bg_id, {}).get("wav", "")
-                bg = load_audio(ROOT / bg_wav_rel) if bg_wav_rel else None
+                if bg_wav_rel:
+                    bg_path_str = str(bg_wav_rel).replace("\\", "/")
+                    bg = load_audio(ROOT / bg_path_str)
+                else:
+                    bg = None
 
             wav = mix(sp, bg, float(row["snr_db"]), int(row["seed"]))
             diag_row = dict(row)
@@ -585,7 +679,7 @@ def run_inference_with_model(model: SpeechLLM, model_id: str, task: str, smoke: 
             diagnostics(diag_row, wav, sp)
 
             raw = model.generate(wav, prompt)
-            log.info(f"[save] {model_id} / {task} - {row['id']} -> '{raw}' saved to {out_path.relative_to(ROOT)}")
+            log.info(f"[save] {model_id} / {task} ({i}/{total_remaining}) - {row['id']} -> '{raw}' saved to {out_path.relative_to(ROOT)}")
             out_row = {
                 **{k: row[k] for k in row.index},
                 "raw": raw,
@@ -594,7 +688,8 @@ def run_inference_with_model(model: SpeechLLM, model_id: str, task: str, smoke: 
             }
             jsonl_append(out_path, out_row)
         except Exception as e:
-            log.warning(f"[error] {model_id} / {task} - {row['id']}: {e}")
+            import traceback
+            log.warning(f"[error] {model_id} / {task} - {row['id']}: {e}\n{traceback.format_exc()}")
             jsonl_append(out_path, {
                 "id": row["id"], "raw": "__ERROR__", "error": str(e),
                 "model": model_id, "task": task,
@@ -659,7 +754,9 @@ def main() -> None:
             log.info(f"[model] {model_id} loaded.")
             vram_dry_run(model)
         except Exception as e:
+            import traceback
             log.error(f"[model] Failed to load {model_id}: {e}")
+            log.error(traceback.format_exc())
             continue
 
         try:

@@ -39,6 +39,7 @@ RANDOM_SEED = 42
 
 # Target counts (per proposal: ~100 ASR items, ~120 KWS items, ~90 SAA items)
 ASR_N   = 100
+CV_N    = 80
 KWS_N   = 120
 SAA_N   = 90
 SMOKE_N = 5  # items per bank in smoke mode
@@ -94,7 +95,8 @@ def build_asr_bank(prog: ProgressLog, n: int) -> None:
             done_ids.add(item["id"])
 
     # Supplement with Common Voice (streamed) to get accent/gender diversity
-    _augment_asr_with_cv(done_ids, n, prog)
+    cv_target = CV_N if n == ASR_N else SMOKE_N
+    _augment_asr_with_cv(done_ids, len(done_ids) + cv_target, prog)
     prog.mark(key)
     log.info(f"[done] ASR bank: {len(jsonl_ids(ASR_BANK))} items.")
 
@@ -109,7 +111,7 @@ def _augment_asr_with_cv(done_ids: set, target: int, prog: ProgressLog) -> None:
     try:
         from datasets import load_dataset
         cv = load_dataset(
-            "mozilla-foundation/common_voice_17_0",
+            "fsicoli/common_voice_17_0",
             "en",
             split="validation",
             streaming=True,
@@ -120,6 +122,12 @@ def _augment_asr_with_cv(done_ids: set, target: int, prog: ProgressLog) -> None:
         for ex in cv:
             if added >= needed:
                 break
+            
+            accent = ex.get("accent") or ""
+            gender = ex.get("gender") or ""
+            if not accent or not gender or accent.lower() == "unknown" or gender.lower() == "unknown":
+                continue
+                
             utt_id = f"cv_{ex['client_id'][:8]}_{added}"
             if utt_id in done_ids:
                 continue
@@ -135,8 +143,8 @@ def _augment_asr_with_cv(done_ids: set, target: int, prog: ProgressLog) -> None:
                 "wav": str(out.relative_to(ROOT)),
                 "transcript": ex.get("sentence", ""),
                 "source": "common_voice_17",
-                "accent": ex.get("accent", "unknown") or "unknown",
-                "gender": ex.get("gender", "unknown") or "unknown",
+                "accent": accent,
+                "gender": gender,
                 "age":    ex.get("age",    "unknown") or "unknown",
             })
             done_ids.add(utt_id)
@@ -261,7 +269,7 @@ def build_saa_bank(prog: ProgressLog, n: int) -> None:
                 jsonl_append(SAA_BANK, {
                     "id": uid,
                     "wav": str(wav.relative_to(ROOT)),
-                    "transcript": "Please call Stella.",
+                    "transcript": "Please call Stella.  Ask her to bring these things with her from the store:  Six spoons of fresh snow peas, five thick slabs of blue cheese, and maybe a snack for her brother Bob.  We also need a small plastic snake and a big toy frog for the kids.  She can scoop these things into three red bags, and we will go meet her Wednesday at the train station.",
                     "accent": accent,
                     "gender": gender,
                 })
