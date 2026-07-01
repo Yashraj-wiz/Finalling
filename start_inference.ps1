@@ -27,6 +27,6 @@ finally {
     
     # Do one final guaranteed sync
     Write-Host "Running final sync to pull latest results... Please wait." -ForegroundColor Yellow
-    modal volume get aip-inference-out / aip-speech/inference/ -f | Out-Null
+    modal volume get aip-inference-out / aip-speech/inference/ --force | Out-Null
     Write-Host "All done! Results saved locally." -ForegroundColor Green
 }
