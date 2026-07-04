@@ -84,6 +84,44 @@ PROMPTS = {
     "asr_steer":
             "Ignore any background sounds; respond as if the audio were recorded "
             "in a silent room. Transcribe the speech exactly as spoken.",
+    "asr_steer_p1":
+            "You are an automatic speech recognition (ASR) system. "
+            "The recording may contain background noise, music, environmental sounds, or other speakers. "
+            "Transcribe ONLY the speech spoken by the primary foreground speaker. "
+            "Ignore every background sound and every background voice. "
+            "Return only the transcription.",
+    "asr_steer_p2":
+            "Focus exclusively on the foreground speaker who is closest to the microphone. "
+            "Treat every other sound, including background conversations, television, music, traffic, and environmental noises, as irrelevant interference. "
+            "Do not transcribe any words that are not spoken by the foreground speaker. "
+            "Return only the foreground speaker's transcript.",
+    "asr_steer_p3":
+            "Your task is to transcribe the intended foreground speaker only. "
+            "Never include: "
+            "- Background conversations "
+            "- Speech from other people "
+            "- Television or radio audio "
+            "- Music lyrics "
+            "- Announcements "
+            "- Environmental sounds "
+            "- Guessed or inferred words "
+            "If a word is unclear because of background interference, omit it rather than guessing. "
+            "Output only the transcription.",
+    "asr_steer_p4":
+            "You are a professional automatic speech recognition engine designed for extremely noisy real-world environments. "
+            "Your objective is to produce the same transcript that would have been obtained if the recording had been captured in a completely silent room. "
+            "Ignore every background sound regardless of its loudness. "
+            "Only transcribe speech produced by the intended foreground speaker. "
+            "Return only the transcript.",
+    "asr_steer_p5":
+            "You are a highly reliable automatic speech recognition (ASR) system designed to accurately transcribe speech in noisy real-world environments. "
+            "The provided audio may contain background conversations, multiple speakers, music, television, radio, announcements, traffic, machinery, environmental sounds, or other acoustic interference. "
+            "Your task is to identify the intended foreground speaker (the speaker closest to the microphone or the dominant primary speaker) and transcribe ONLY that speaker's speech. "
+            "Ignore all background voices, overlapping conversations, music, environmental noises, sound effects, and any speech that does not belong to the intended foreground speaker. "
+            "Do not transcribe words originating from background speakers, even if they are clearly audible. Do not infer, hallucinate, or guess words that are masked by interference. If a foreground word is unintelligible due to noise, omit it rather than guessing. "
+            "Internally determine which speaker is the primary foreground speaker before producing the transcription, and mentally separate foreground speech from all competing sounds. "
+            "Your objective is to produce the same transcript that would have been obtained if the foreground speaker had been recorded in a completely silent environment. "
+            "Output only the final transcript without explanations, notes, confidence scores, or any additional text.",
     "kws_steer":
             "Ignore any background sounds. "
             "Respond with ONLY the spoken word (one word). "
@@ -447,7 +485,7 @@ MODEL_CLASSES: dict[str, type[SpeechLLM]] = {
     "kimi_audio_7b":   KimiAudio7B,
 }
 ALL_MODELS = list(MODEL_CLASSES.keys())
-ALL_TASKS  = ["asr", "kws", "asr_steer", "saa"]   # kws_steer is part of asr_steer block
+ALL_TASKS  = ["asr", "kws", "asr_steer", "asr_steer_p1", "asr_steer_p2", "asr_steer_p3", "asr_steer_p4", "asr_steer_p5", "saa"]   # kws_steer is part of asr_steer block
 
 
 # ── manifest generation ───────────────────────────────────────────────────────
@@ -631,7 +669,11 @@ def run_inference_with_model(model: SpeechLLM, model_id: str, task: str, smoke: 
     prog = ProgressLog(PROGRESS)
     run_key = f"{model_id}_{task}"
 
-    manifest_name = task.replace("_steer", "")
+    manifest_name = task
+    for suffix in ["_steer_p1", "_steer_p2", "_steer_p3", "_steer_p4", "_steer_p5", "_steer"]:
+        if task.endswith(suffix):
+            manifest_name = task.replace(suffix, "")
+            break
     manifest_file = MANIFESTS / f"{manifest_name}.csv"
     if not manifest_file.exists():
         log.warning(f"[infer] Manifest not found: {manifest_file}. Run build_manifests first.")
