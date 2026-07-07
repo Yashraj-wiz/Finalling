@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-03_curate_battery.py — Stage 3: curate backgrounds, build scrambled twins,
+03_curate_battery.py — Stage 3: curate backgrounds,
 extract descriptors, freeze pre-registration.
 
 Produces:
   data/bg/             ~20 curated mono 16 kHz WAVs (trimmed/looped, normalised)
-  data/bg_scrambled/   8 phase-scrambled twins of the speech-like backgrounds
   descriptors/battery.parquet
   prereg/prereg.json
 
@@ -30,7 +29,6 @@ from utils import (ROOT, DATA, SR, SPEECH_LUFS, BG_LUFS, SNR_GRID,
 log = get_logger("03_curate_battery")
 PROGRESS = ROOT / "checks" / "battery_progress.json"
 BG_DIR   = DATA / "bg"
-BGS_DIR  = DATA / "bg_scrambled"
 BATTERY  = ROOT / "descriptors" / "battery.parquet"
 PREREG   = ROOT / "prereg" / "prereg.json"
 
@@ -56,20 +54,14 @@ BATTERY_SPEC: list[tuple[str, str, str]] = [
     ("snsd_cafeteria", "ms_snsd/noise_train/CafeTeria_1.wav",     "speech_like"),
     ("snsd_restaurant","ms_snsd/noise_train/Restaurant_1.wav",    "speech_like"),
     ("snsd_square",    "ms_snsd/noise_train/Square_1.wav",        "speech_like"),
-    ("snsd_office",    "ms_snsd/noise_train/Office_1.wav",        "speech_like"),
+    ("snsd_airport",    "ms_snsd/noise_train/AirportAnnouncements_7.wav",        "speech_like"),
     # NOISEX-92 babble
     ("noisex_babble",  "noisex/babble.wav",                        "speech_like"),
     # MUSAN music and hubbub
-    ("musan_music",    "musan/**/music/fma/music-fma-0001.wav", "music"),
+    ("musan_music",    "musan/**/music/fma/music-fma-0062.wav", "speech_like"),
     ("musan_hubbub",   "musan/**/speech/librivox/speech-librivox-0001.*", "speech_like"),
     # Stationary (MS-SNSD AirConditioner)
     ("snsd_airconditioner", "ms_snsd/noise_train/AirConditioner_1.wav", "stationary"),
-]
-
-# Speech-like subset (for scrambled twins) — must match bg_ids above
-SPEECH_LIKE_IDS = [
-    "snsd_cafeteria", "snsd_restaurant", "snsd_square", "snsd_office",
-    "noisex_babble", "musan_hubbub", "musan_music", "snsd_airconditioner",
 ]
 
 CLIP_LEN_S = 30  # seconds to trim/loop each background to
@@ -90,19 +82,6 @@ def _prepare_bg(src_path: Path, out_path: Path) -> np.ndarray | None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     sf.write(str(out_path), x, SR)
     return x
-
-
-# ── phase scrambling ──────────────────────────────────────────────────────────
-def phase_scramble(x: np.ndarray, seed: int = 0) -> np.ndarray:
-    """
-    Same magnitude spectrum + energy, no temporal structure / linguistic content.
-    From §2.3 of implementation plan.
-    """
-    X = np.fft.rfft(x)
-    mag = np.abs(X)
-    rng = np.random.default_rng(seed)
-    ph = np.exp(1j * rng.uniform(0, 2 * np.pi, size=mag.shape))
-    return np.fft.irfft(mag * ph, n=len(x)).astype(np.float32)
 
 
 # ── descriptor extraction ─────────────────────────────────────────────────────
@@ -267,9 +246,6 @@ def curate_battery(prog: ProgressLog, smoke: bool) -> None:
         records.append(desc)
         prog.mark(key)
 
-    # Build scrambled twins for speech-like backgrounds
-    build_scrambled_twins(prog, smoke)
-
     # Save battery.parquet — always write even if records came from cache
     if records:
         import pandas as pd
@@ -283,28 +259,6 @@ def curate_battery(prog: ProgressLog, smoke: bool) -> None:
     freeze_prereg(smoke)
 
 
-
-def build_scrambled_twins(prog: ProgressLog, smoke: bool) -> None:
-    ids = SPEECH_LIKE_IDS[:2] if smoke else SPEECH_LIKE_IDS
-    for bg_id in ids:
-        key = f"scramble_{bg_id}"
-        if prog.done(key):
-            log.info(f"[skip] scramble for {bg_id} already done.")
-            continue
-        src = BG_DIR / f"{bg_id}.wav"
-        if not src.exists():
-            log.warning(f"[scramble] source missing: {src}")
-            continue
-        x = load_audio(src)
-        xs = phase_scramble(x, seed=0)
-        xs = loudness_normalize(xs, BG_LUFS)
-        out = BGS_DIR / f"{bg_id}_scrambled.wav"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        sf.write(str(out), xs, SR)
-        log.info(f"[scramble] {bg_id} → {out.name}")
-        prog.mark(key)
-
-
 # ── pre-registration ──────────────────────────────────────────────────────────
 def freeze_prereg(smoke: bool) -> None:
     if PREREG.exists():
@@ -314,10 +268,7 @@ def freeze_prereg(smoke: bool) -> None:
     prereg = {
         "project": "AIP-Speech",
         "battery_ids": [s[0] for s in (BATTERY_SPEC[:3] if smoke else BATTERY_SPEC)],
-        "speech_like_ids": SPEECH_LIKE_IDS[:2] if smoke else SPEECH_LIKE_IDS,
         "snr_grid_db": SNR_GRID,
-        "scramble_method": "phase_scramble(seed=0): irfft(|rfft(x)| * exp(i*random_phase))",
-        "scramble_backgrounds": SPEECH_LIKE_IDS[:2] if smoke else SPEECH_LIKE_IDS,
         "descriptor_definitions": {
             "speech_likeness":   "Fraction of 30ms frames above energy threshold (VAD proxy)",
             "linguistic_content":"Whisper-base confidence-weighted word count on background",
@@ -329,7 +280,7 @@ def freeze_prereg(smoke: bool) -> None:
             "loudness":          "Integrated LUFS (pyloudnorm)",
         },
         "significance_rule": "Paired permutation test p<0.05 (Bonferroni-corrected across backgrounds); "
-                             "semantic claims require real>scrambled; energetic claims require SNR-monotone.",
+                             "energetic claims require SNR-monotone.",
         "metric_definitions": {
             "DWER":  "WER(noisy) - WER(clean), per item",
             "FAR":   "False-alarm rate on non-target KWS clips",
@@ -346,7 +297,7 @@ def freeze_prereg(smoke: bool) -> None:
 
 # ── main ──────────────────────────────────────────────────────────────────────
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Stage 3 — Curate battery, scrambles, descriptors")
+    ap = argparse.ArgumentParser(description="Stage 3 — Curate battery, descriptors")
     ap.add_argument("--smoke-test", action="store_true",
                     help="Process only 3 backgrounds to verify the pipeline.")
     args = ap.parse_args()

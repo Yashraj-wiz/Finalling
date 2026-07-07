@@ -126,6 +126,39 @@ PROMPTS = {
             "Ignore any background sounds. "
             "Respond with ONLY the spoken word (one word). "
             "If no clear word is spoken, respond with SILENCE.",
+    "kws_steer_p1":
+            "You are an automatic keyword spotting (KWS) system. "
+            "The recording may contain background noise, music, environmental sounds, or other speakers. "
+            "Respond with ONLY the single keyword spoken by the primary foreground speaker. "
+            "Ignore every background sound and every background voice. "
+            "If no foreground keyword is spoken, respond with SILENCE.",
+    "kws_steer_p2":
+            "Focus exclusively on the foreground speaker who is closest to the microphone. "
+            "Treat every other sound, including background conversations, television, music, traffic, and environmental noises, as irrelevant interference. "
+            "Respond with ONLY the single keyword spoken by the foreground speaker. "
+            "If no clear foreground keyword is spoken, respond with SILENCE.",
+    "kws_steer_p3":
+            "Your task is to identify the single keyword spoken by the intended foreground speaker. "
+            "Never respond with words from: "
+            "- Background conversations "
+            "- Speech from other people "
+            "- Television or radio audio "
+            "- Guessed or inferred words "
+            "If a keyword is unclear because of background interference, respond with SILENCE. "
+            "Output only the single keyword.",
+    "kws_steer_p4":
+            "You are a professional keyword spotting engine designed for extremely noisy real-world environments. "
+            "Your objective is to detect the same keyword that would have been detected if the recording had been captured in a completely silent room. "
+            "Ignore every background sound regardless of its loudness. "
+            "Only respond to the keyword spoken by the intended foreground speaker. "
+            "Return only the keyword, or SILENCE if none is detected.",
+    "kws_steer_p5":
+            "You are a highly reliable keyword spotting (KWS) system designed for noisy real-world environments. "
+            "The provided audio may contain background conversations, multiple speakers, music, television, radio, announcements, traffic, machinery, environmental sounds, or other acoustic interference. "
+            "Identify the intended foreground speaker and respond with ONLY the single keyword spoken by that speaker. "
+            "Ignore all background voices, overlapping conversations, music, and environmental noises. "
+            "If a foreground keyword is unintelligible due to noise, respond with SILENCE rather than guessing. "
+            "Output only the final keyword without explanations, notes, or any additional text.",
     "saa":  "Transcribe the speech in this audio clip exactly as spoken. "
             "Return only the transcription text.",
 }
@@ -252,20 +285,21 @@ class Qwen25Omni7B(SpeechLLM):
         torch.cuda.empty_cache()
 
 
-# ── Qwen2-Audio-7B (fp16) ────────────────────────────────────────────────────
+# ── Qwen2-Audio-7B (8-bit) ───────────────────────────────────────────────────
 class Qwen2Audio7B(SpeechLLM):
     model_id = "qwen2_audio_7b"
 
     def __init__(self):
         import torch
-        from transformers import AutoProcessor, Qwen2AudioForConditionalGeneration
+        from transformers import AutoProcessor, Qwen2AudioForConditionalGeneration, BitsAndBytesConfig
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.processor = AutoProcessor.from_pretrained(
             "Qwen/Qwen2-Audio-7B-Instruct", cache_dir=_cache(), trust_remote_code=True)
+        quantization_config = BitsAndBytesConfig(load_in_8bit=True)
         self.model = Qwen2AudioForConditionalGeneration.from_pretrained(
             "Qwen/Qwen2-Audio-7B-Instruct",
             cache_dir=_cache(),
-            torch_dtype=torch.float16,
+            quantization_config=quantization_config,
             device_map="auto",
             trust_remote_code=True,
             attn_implementation="sdpa",
@@ -485,7 +519,11 @@ MODEL_CLASSES: dict[str, type[SpeechLLM]] = {
     "kimi_audio_7b":   KimiAudio7B,
 }
 ALL_MODELS = list(MODEL_CLASSES.keys())
-ALL_TASKS  = ["asr", "kws", "asr_steer", "asr_steer_p1", "asr_steer_p2", "asr_steer_p3", "asr_steer_p4", "asr_steer_p5", "saa"]   # kws_steer is part of asr_steer block
+ALL_TASKS  = [
+    "asr", "kws", "saa",
+    "asr_steer", "asr_steer_p1", "asr_steer_p2", "asr_steer_p3", "asr_steer_p4", "asr_steer_p5",
+    "kws_steer", "kws_steer_p1", "kws_steer_p2", "kws_steer_p3", "kws_steer_p4", "kws_steer_p5",
+]
 
 
 # ── manifest generation ───────────────────────────────────────────────────────
@@ -669,10 +707,11 @@ def run_inference_with_model(model: SpeechLLM, model_id: str, task: str, smoke: 
     prog = ProgressLog(PROGRESS)
     run_key = f"{model_id}_{task}"
 
+    # Resolve manifest: strip steer/pN suffixes to get base task name (asr or kws)
     manifest_name = task
     for suffix in ["_steer_p1", "_steer_p2", "_steer_p3", "_steer_p4", "_steer_p5", "_steer"]:
         if task.endswith(suffix):
-            manifest_name = task.replace(suffix, "")
+            manifest_name = task[: task.rfind(suffix)]
             break
     manifest_file = MANIFESTS / f"{manifest_name}.csv"
     if not manifest_file.exists():
@@ -770,7 +809,8 @@ def main() -> None:
         # Filter tasks that actually have remaining work for this model
         tasks_to_run = []
         for task in tasks:
-            manifest_file = MANIFESTS / f"{'asr' if 'asr' in task else 'kws'}.csv"
+            base_task = "kws" if task.startswith("kws") else "asr"
+            manifest_file = MANIFESTS / f"{base_task}.csv"
             if manifest_file.exists():
                 import pandas as pd
                 manifest = pd.read_csv(manifest_file)

@@ -122,19 +122,17 @@ def fig2_semantic_gap() -> None:
         log.warning("[Fig2] e2_asr.csv not found.")
         return
 
-    grouped = e2.groupby("background_id")[["dwer_real", "dwer_scrambled"]].mean().reset_index()
+    grouped = e2.groupby("background_id")["dwer_real"].mean().reset_index()
     grouped = grouped.dropna(subset=["dwer_real"])
 
     x = np.arange(len(grouped))
     w = 0.35
     fig, ax = plt.subplots(figsize=(8, 4), tight_layout=True)
-    ax.bar(x - w/2, grouped["dwer_real"], w, label="Real", color=PALETTE[0])
-    ax.bar(x + w/2, grouped["dwer_scrambled"].fillna(0), w, label="Scrambled",
-           color=PALETTE[1], alpha=0.85)
+    ax.bar(x, grouped["dwer_real"], w, label="Real", color=PALETTE[0])
     ax.set_xticks(x)
     ax.set_xticklabels(grouped["background_id"], rotation=35, ha="right", fontsize=8)
     ax.set_ylabel("ΔWER @ 0 dB")
-    ax.set_title("Fig 2 — Real vs Scrambled: the Semantic Gap (E2 / H2–H3)")
+    ax.set_title("Fig 2 — Real: Semantic Bias (E2 / H2–H3)")
     ax.legend()
     ax.axhline(0, color="grey", lw=0.5, ls="--")
     out = FIG_DIR / "fig2_semantic_gap.pdf"

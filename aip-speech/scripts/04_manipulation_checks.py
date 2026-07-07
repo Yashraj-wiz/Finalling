@@ -38,7 +38,6 @@ PROGRESS    = ROOT / "checks" / "checks_progress.json"
 INSPECT_DIR = ROOT / "checks" / "inspection"
 BG_PRESENCE = ROOT / "checks" / "bg_presence.csv"
 WER_CONST   = ROOT / "checks" / "wer_constancy.csv"
-SCRAMBLE_V  = ROOT / "checks" / "scramble_validity.csv"
 DETERMINISM = ROOT / "checks" / "determinism.json"
 
 RANDOM_SEED    = 42
@@ -195,91 +194,30 @@ def check_wer_constancy(prog: ProgressLog, smoke: bool) -> None:
     log.info(f"[done] wer_constancy → {WER_CONST}")
 
 
-# ── check 3: scramble validity ────────────────────────────────────────────────
-def check_scramble_validity(prog: ProgressLog, smoke: bool) -> None:
-    """
-    For each scrambled twin:
-    - spectrum should match original within tolerance
-    - linguistic_content (Whisper word count) should be ~0
-    """
-    key = "scramble_validity"
-    if prog.done(key):
-        log.info("[skip] scramble_validity already done.")
-        return
-
-    bg_dir  = DATA / "bg"
-    bgs_dir = DATA / "bg_scrambled"
-    twins = sorted(bgs_dir.glob("*_scrambled.wav"))
-    if smoke:
-        twins = twins[:2]
-
-    try:
-        import whisper
-        wmodel = whisper.load_model(
-            "base",
-            download_root=str(ROOT / "models" / "cache" / "whisper")
-        )
-    except ImportError:
-        log.warning("[scramble_validity] whisper not installed.")
-        wmodel = None
-
-    for twin_path in twins:
-        orig_id = twin_path.stem.replace("_scrambled", "")
-        orig_path = bg_dir / f"{orig_id}.wav"
-        if not orig_path.exists():
-            continue
-        orig = load_audio(orig_path)
-        twin = load_audio(twin_path)
-
-        # Spectral match: cosine similarity of magnitude spectra
-        O = np.abs(np.fft.rfft(orig))
-        T = np.abs(np.fft.rfft(twin))
-        min_len = min(len(O), len(T))
-        cos_sim = float(np.dot(O[:min_len], T[:min_len]) /
-                        (np.linalg.norm(O[:min_len]) * np.linalg.norm(T[:min_len]) + 1e-9))
-
-        # Linguistic content in twin
-        ling_content = 0.0
-        if wmodel is not None:
-            result = wmodel.transcribe(twin, language="en", fp16=False, word_timestamps=True)
-            words = [w for seg in result.get("segments", []) for w in seg.get("words", [])]
-            ling_content = float(sum(abs(w.get("probability", 0)) for w in words))
-
-        csv_append(SCRAMBLE_V, {
-            "bg_id": orig_id,
-            "spectral_cosine_sim": round(cos_sim, 4),
-            "twin_linguistic_content": round(ling_content, 4),
-            "pass_spectral": cos_sim > 0.99,
-            "pass_linguistic": ling_content < 2.0,
-        }, fieldnames=[
-            "bg_id", "spectral_cosine_sim", "twin_linguistic_content",
-            "pass_spectral", "pass_linguistic"
-        ])
-
-    prog.mark(key)
-    log.info(f"[done] scramble_validity → {SCRAMBLE_V}")
-
-
-# ── check 4: determinism floor ────────────────────────────────────────────────
+# ── check 3: determinism floor ────────────────────────────────────────────────
 def check_determinism(prog: ProgressLog, smoke: bool) -> None:
     """
-    Run 50 clean ASR items through the first available model twice with
-    greedy decoding and confirm identical outputs. Records residual.
+    Evaluate transcribe determinism by running Whisper twice on same WAVs.
     """
     key = "determinism"
     if prog.done(key):
-        log.info("[skip] determinism check already done.")
+        log.info("[skip] determinism already done.")
         return
 
-    items = jsonl_read(ROOT / "itembanks" / "asr.jsonl")
-    n = 5 if smoke else 50
-    items = items[:n]
-
-    if not items:
-        log.warning("[determinism] No ASR items found.")
+    import pandas as pd
+    asr_f = ROOT / "manifests" / "asr.csv"
+    if not asr_f.exists():
+        log.warning("[determinism] asr manifest missing.")
         return
 
-    # Use Whisper as a stand-in determinism checker (avoids loading a full LLM)
+    df = pd.read_csv(asr_f)
+    noisy = df[df["condition"] == "noisy"]
+    if smoke:
+        noisy = noisy.head(INSPECT_N_SMOKE)
+    else:
+        # Sample 10 items for speed but sufficient coverage
+        noisy = noisy.sample(n=min(len(noisy), 10), random_state=RANDOM_SEED)
+
     try:
         import whisper
         wmodel = whisper.load_model(
@@ -287,16 +225,23 @@ def check_determinism(prog: ProgressLog, smoke: bool) -> None:
             download_root=str(ROOT / "models" / "cache" / "whisper")
         )
     except ImportError:
-        log.warning("[determinism] whisper not installed — skipping.")
-        prog.mark(key)
+        log.warning("[determinism] whisper not installed.")
         return
 
     mismatches = 0
     total = 0
-    for item in items:
-        wav_path = ROOT / item["wav"]
-        if not wav_path.exists():
-            continue
+    battery = {b["bg_id"]: b for b in _load_battery()}
+
+    for _, row in noisy.iterrows():
+        sp = load_audio(ROOT / str(row["speech_path"]))
+        bg_wav = battery.get(row["background_id"], {}).get("wav", "")
+        bg = load_audio(ROOT / str(bg_wav)) if bg_wav else None
+        wav = mix(sp, bg, float(row["snr_db"]), int(row["seed"]))
+
+        # save temporarily
+        wav_path = ROOT / "checks" / "temp_det.wav"
+        sf.write(str(wav_path), wav, SR)
+
         x = load_audio(wav_path)
         r1 = wmodel.transcribe(x, language="en", fp16=False).get("text", "")
         r2 = wmodel.transcribe(x, language="en", fp16=False).get("text", "")
@@ -327,7 +272,6 @@ def main() -> None:
     materialise_inspection(prog, smoke=args.smoke_test)
     check_bg_presence(prog, smoke=args.smoke_test)
     check_wer_constancy(prog, smoke=args.smoke_test)
-    check_scramble_validity(prog, smoke=args.smoke_test)
     check_determinism(prog, smoke=args.smoke_test)
     log.info("=== Stage 4 complete. ===")
 

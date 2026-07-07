@@ -178,9 +178,9 @@ def _kws_targets() -> list[str]:
     return ["yes","no","up","down","left","right","on","off","stop","go"]
 
 
-# ── E2 scoring: real vs scrambled, BIR, TIR ──────────────────────────────────
+# ── E2 scoring: BIR, TIR ──────────────────────────────────────────────────────
 def score_e2(smoke: bool) -> None:
-    log.info("[E2] Scoring real vs scrambled + injection rates...")
+    log.info("[E2] Scoring real + injection rates...")
     battery_df = _load_battery_df()
     speech_like_ids = battery_df[battery_df["category"] == "speech_like"]["bg_id"].tolist() \
         if not battery_df.empty else []
@@ -195,7 +195,6 @@ def score_e2(smoke: bool) -> None:
 
         for bg_id in speech_like_ids:
             real_rows      = df[(df["background_id"] == bg_id) & (df["snr_db"] == 0)]
-            scrambled_rows = df[(df["background_id"] == f"{bg_id}_scrambled") & (df["snr_db"] == 0)]
             clean_rows     = df[df["condition"] == "clean"]
 
             for _, r_row in real_rows.iterrows():
@@ -208,15 +207,6 @@ def score_e2(smoke: bool) -> None:
                 wer_clean = _wer(ref, hyp_clean) if hyp_clean else float("nan")
                 dwer_real = wer_real - wer_clean
 
-                scr_match = scrambled_rows[scrambled_rows["speech_id"] == r_row["speech_id"]]
-                if len(scr_match) > 0:
-                    hyp_scr   = str(scr_match.iloc[0]["raw"])
-                    wer_scr   = _wer(ref, hyp_scr)
-                    dwer_scr  = wer_scr - wer_clean
-                    semantic_gap = dwer_real - dwer_scr
-                else:
-                    dwer_scr = semantic_gap = float("nan")
-
                 # BIR: inserted tokens matching background's label vocabulary
                 bir = _compute_bir(hyp_real, ref, bg_id)
 
@@ -225,8 +215,6 @@ def score_e2(smoke: bool) -> None:
                     "speech_id": r_row["speech_id"],
                     "background_id": bg_id,
                     "dwer_real": round(dwer_real, 4),
-                    "dwer_scrambled": round(dwer_scr, 4) if not np.isnan(dwer_scr) else None,
-                    "semantic_gap": round(semantic_gap, 4) if not np.isnan(semantic_gap) else None,
                     "bir": round(bir, 4),
                 })
 
@@ -235,7 +223,7 @@ def score_e2(smoke: bool) -> None:
     pd.DataFrame(records_asr).to_csv(out, index=False)
     log.info(f"[E2-ASR] → {out}")
 
-    # TIR: FAR on injection probes vs scrambled vs generic noise
+    # TIR: FAR on injection probes vs generic noise
     _score_tir(smoke)
 
 

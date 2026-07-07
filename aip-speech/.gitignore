@@ -12,6 +12,8 @@ transformers_cache/
 inference/
 !inference/.gitkeep
 inference_backup/
+inference_1/
+inference backup/
 inference_run.log
 
 # ── Results / figures ─────────────────────────────────────────────────────────
@@ -23,7 +25,7 @@ checks/
 !checks/.gitkeep
 
 # ── Descriptors (generated parquet) ───────────────────────────────────────────
-descriptors/battery.parquet
+descriptors/
 
 # ── Item banks & manifests (generated) ────────────────────────────────────────
 itembanks/
@@ -35,6 +37,9 @@ manifests/
 scratch/
 test_*.py
 Kimi-Audio/
+*src.txt
+results_1st_run/
+scripts/*_airport*.py
 
 # ── Pre-registration (KEEP — frozen after Day 2) ──────────────────────────────
 prereg/*

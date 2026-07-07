@@ -4,7 +4,7 @@
 
 Experiments scored:
   E1  WER/CER + sub/del/ins + ΔWER (ASR);  Accuracy/FAR/Miss (KWS)
-  E2  ΔWER real-vs-scrambled, BIR (ASR);   TIR on injection probes (KWS)
+  E2  ΔWER on speech-like noise, BIR (ASR);   TIR on injection probes (KWS)
   E3  Per-subgroup ΔWER, Robustness Gap, DRI;  SAA controlled cut
   E4  Residual-Effect Ratio (RER), compliance rate
 
@@ -42,7 +42,7 @@ KWS_TARGETS = ["yes", "no", "up", "down", "left", "right",
 def _all_models() -> list[str]:
     if not INFER.exists():
         return []
-    return sorted(d.name for d in INFER.iterdir() if d.is_dir() and "qwen2_audio" not in d.name)
+    return sorted(d.name for d in INFER.iterdir() if d.is_dir())
 
 
 import re
@@ -216,7 +216,7 @@ def _score_e1_profile(smoke: bool) -> None:
                     log.info(f"  {row['model']} / {row['category']}: Mean ΔWER = {row['dwer']:.4f}")
 
 
-# ── E2-ASR: real vs scrambled, BIR ───────────────────────────────────────────
+# ── E2-ASR: BIR ──────────────────────────────────────────────────────────────
 def _compute_bir(hyp: str, ref: str, bg_id: str) -> float:
     """Background-Injection Rate: fraction of inserted tokens matching bg vocab."""
     import jiwer
@@ -241,7 +241,7 @@ def _compute_bir(hyp: str, ref: str, bg_id: str) -> float:
 
 
 def score_e2(smoke: bool) -> None:
-    log.info("[E2] Scoring real-vs-scrambled + BIR + TIR ...")
+    log.info("[E2] Scoring real + BIR + TIR ...")
     bat = _load_battery()
     speech_like = (bat[bat.get("category", pd.Series()) == "speech_like"]["bg_id"].tolist()
                    if "category" in bat.columns else [])
@@ -258,7 +258,6 @@ def score_e2(smoke: bool) -> None:
 
         for bg_id in speech_like:
             real = df[(df["background_id"] == bg_id) & (df["snr_db"] == 0)]
-            scram = df[(df["background_id"] == f"{bg_id}_scrambled") & (df["snr_db"] == 0)]
 
             for _, rr in real.iterrows():
                 ref = str(rr.get("transcript", ""))
@@ -272,22 +271,12 @@ def score_e2(smoke: bool) -> None:
                 wer_c = _wer(ref, hyp_c) if hyp_c else float("nan")
                 dwer_r = wer_r - wer_c
 
-                sm = scram[scram["speech_id"] == rr["speech_id"]]
-                if len(sm) > 0:
-                    hyp_s = str(sm.iloc[0]["raw"])
-                    dwer_s = _wer(ref, hyp_s) - wer_c
-                    semantic_gap = dwer_r - dwer_s
-                else:
-                    dwer_s = semantic_gap = float("nan")
-
                 bir = _compute_bir(hyp_r, ref, bg_id)
 
                 records.append({
                     "model": mid, "speech_id": rr["speech_id"],
                     "background_id": bg_id,
                     "dwer_real": round(dwer_r, 4),
-                    "dwer_scrambled": round(dwer_s, 4) if not np.isnan(dwer_s) else None,
-                    "semantic_gap": round(semantic_gap, 4) if not np.isnan(semantic_gap) else None,
                     "bir": round(bir, 4),
                 })
 
@@ -298,7 +287,7 @@ def score_e2(smoke: bool) -> None:
 
 
 def _score_tir(smoke: bool) -> None:
-    """TIR = FAR on injection probes vs scrambled vs generic noise."""
+    """TIR = FAR on injection probes vs generic noise."""
     pf = ROOT / "prereg" / "injection_probe_ids.json"
     if not pf.exists():
         log.warning("[TIR] No injection probe IDs. Skipping.")
@@ -530,6 +519,65 @@ def score_e4(smoke: bool) -> None:
     _save(df_e4, "e4_steer.csv")
 
 
+# ── E4-KWS: Steerability for keyword spotting ─────────────────────────────────
+def score_e4_kws(smoke: bool) -> None:
+    log.info("[E4-KWS] Steerability / KWS prompt engineering scoring ...")
+    records = []
+    steer_tasks = ["kws_steer", "kws_steer_p1", "kws_steer_p2", "kws_steer_p3", "kws_steer_p4", "kws_steer_p5"]
+    for mid in _all_models():
+        df_base = _load_inference(mid, "kws")
+        if df_base.empty:
+            continue
+
+        available_steers = []
+        for st in steer_tasks:
+            df_st = _load_inference(mid, st)
+            if not df_st.empty:
+                available_steers.append((df_st, st.replace("kws_", "")))
+
+        if not available_steers:
+            continue
+
+        all_evals = [(df_base, "base")] + available_steers
+        for df, label in all_evals:
+            df_copy = df.copy()
+            if smoke:
+                df_copy = df_copy.head(SMOKE_N)
+            for _, row in df_copy.iterrows():
+                ref_kw   = str(row.get("keyword", "")).lower().strip()
+                hyp_raw  = str(row.get("raw", "")).lower().strip()
+                is_target = bool(row.get("is_target", False))
+                if hyp_raw == "__error__":
+                    continue
+                hyp_kw = hyp_raw.split()[0] if hyp_raw else "silence"
+                correct      = (hyp_kw == ref_kw) if is_target else (hyp_kw not in KWS_TARGETS)
+                false_alarm  = (not is_target) and (hyp_kw in KWS_TARGETS)
+                records.append({
+                    "model": mid,
+                    "speech_id":     row.get("speech_id", ""),
+                    "background_id": row.get("background_id", ""),
+                    "snr_db":        row.get("snr_db", ""),
+                    "condition":     row.get("condition", ""),
+                    "prompt":        label,
+                    "is_target":     is_target,
+                    "correct":       int(correct),
+                    "false_alarm":   int(false_alarm),
+                })
+
+    df_e4k = pd.DataFrame(records)
+    if not df_e4k.empty:
+        base_acc = df_e4k[df_e4k["prompt"] == "base"]["correct"].mean()
+        log.info(f"[E4-KWS] Base KWS accuracy: {base_acc:.4f}")
+        for lbl in df_e4k["prompt"].unique():
+            if lbl == "base":
+                continue
+            acc = df_e4k[df_e4k["prompt"] == lbl]["correct"].mean()
+            improvement = acc - base_acc
+            log.info(f"  KWS ({lbl}): Acc={acc:.4f}, Δacc={improvement:+.4f}")
+
+    _save(df_e4k, "e4_kws_steer.csv")
+
+
 # ── Plots (Visualizations) ───────────────────────────────────────────────────
 def plot_all_results(smoke: bool) -> None:
     log.info("[Plots] Generating result visualizations ...")
@@ -652,29 +700,18 @@ def plot_all_results(smoke: bool) -> None:
             plt.savefig(PLOT_DIR / "e2_task_generalisation_scatter.png")
             plt.close()
 
-    # ── Fig 2: E2 Semantic Gap & Injection ──
+    # ── Fig 2: E2 Semantic Bias & Injection ──
     e2_f = RESULTS / "e2_semantic.csv"
     if e2_f.exists() and e2_f.stat().st_size > 10:
         df_e2 = pd.read_csv(e2_f)
-        if "dwer_real" in df_e2.columns and "dwer_scrambled" in df_e2.columns:
-            df_e2_melt = df_e2.melt(id_vars=["model"], value_vars=["dwer_real", "dwer_scrambled"], var_name="Condition", value_name="ΔWER")
-            
+        if "dwer_real" in df_e2.columns:
             # Bar plot
             plt.figure(figsize=(10, 6))
-            sns.barplot(data=df_e2_melt, x="model", y="ΔWER", hue="Condition")
-            plt.title("Fig 2a: E2 Semantic Gap (Real vs Scrambled at 0 dB) - Bar")
+            sns.barplot(data=df_e2, x="model", y="dwer_real")
+            plt.title("Fig 2a: E2 ASR ΔWER under Speech-like Noise at 0 dB")
             plt.xticks(rotation=45)
             plt.tight_layout()
-            plt.savefig(PLOT_DIR / "fig2a_semantic_gap_bar.png")
-            plt.close()
-
-            # Point plot (Line graph)
-            plt.figure(figsize=(10, 6))
-            sns.pointplot(data=df_e2_melt, x="model", y="ΔWER", hue="Condition", markers="x", linestyles="--")
-            plt.title("Fig 2a: E2 Semantic Gap (Real vs Scrambled at 0 dB) - Line")
-            plt.xticks(rotation=45)
-            plt.tight_layout()
-            plt.savefig(PLOT_DIR / "fig2a_semantic_gap_line.png")
+            plt.savefig(PLOT_DIR / "fig2a_dwer_real_bar.png")
             plt.close()
 
         if "bir" in df_e2.columns:
@@ -769,29 +806,97 @@ def plot_all_results(smoke: bool) -> None:
             plt.savefig(PLOT_DIR / "fig3d_saa_accent_box.png")
             plt.close()
 
-    # ── E4 Steerability ──
+    # ── E4 ASR Steerability ──
     e4_f = RESULTS / "e4_steer.csv"
     if e4_f.exists() and e4_f.stat().st_size > 10:
         df_e4 = pd.read_csv(e4_f)
-        
-        # Bar plot
-        plt.figure(figsize=(10, 6))
+
+        # Bar plot: mean ΔWER per prompt per model
+        plt.figure(figsize=(12, 6))
         sns.barplot(data=df_e4, x="model", y="dwer", hue="prompt")
-        plt.title("E4: Instruction Steerability (ΔWER under different prompts) - Bar")
+        plt.title("E4 ASR: Instruction Steerability (ΔWER by Prompt) - Bar")
         plt.xticks(rotation=45)
         plt.tight_layout()
-        plt.savefig(PLOT_DIR / "e4_steerability_bar.png")
+        plt.savefig(PLOT_DIR / "e4_asr_steerability_bar.png")
         plt.close()
 
-        # Point plot (Line graph)
-        plt.figure(figsize=(10, 6))
+        # Line plot: mean ΔWER per prompt per model
+        plt.figure(figsize=(12, 6))
         sns.pointplot(data=df_e4, x="model", y="dwer", hue="prompt", markers="o", linestyles="-")
-        plt.title("E4: Instruction Steerability - Line")
+        plt.title("E4 ASR: Instruction Steerability (ΔWER by Prompt) - Line")
         plt.xticks(rotation=45)
         plt.tight_layout()
-        plt.savefig(PLOT_DIR / "e4_steerability_line.png")
+        plt.savefig(PLOT_DIR / "e4_asr_steerability_line.png")
         plt.close()
-        
+
+        # Box plot: ΔWER distribution per prompt
+        plt.figure(figsize=(14, 6))
+        sns.boxplot(data=df_e4, x="prompt", y="dwer", hue="model")
+        plt.title("E4 ASR: ΔWER Distribution per Steering Prompt - Box")
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        plt.savefig(PLOT_DIR / "e4_asr_steerability_box.png")
+        plt.close()
+
+    # ── E4 KWS Steerability ──
+    e4_kws_f = RESULTS / "e4_kws_steer.csv"
+    if e4_kws_f.exists() and e4_kws_f.stat().st_size > 10:
+        df_e4k = pd.read_csv(e4_kws_f)
+
+        # 1. Bar: mean accuracy per prompt per model
+        if "correct" in df_e4k.columns:
+            acc_grp = df_e4k.groupby(["model", "prompt"])["correct"].mean().reset_index()
+            acc_grp.rename(columns={"correct": "accuracy"}, inplace=True)
+            plt.figure(figsize=(12, 6))
+            sns.barplot(data=acc_grp, x="model", y="accuracy", hue="prompt")
+            plt.title("E4 KWS: Keyword Accuracy by Steering Prompt - Bar")
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            plt.savefig(PLOT_DIR / "e4_kws_steerability_acc_bar.png")
+            plt.close()
+
+            # 2. Line: accuracy per prompt per model
+            plt.figure(figsize=(12, 6))
+            sns.pointplot(data=acc_grp, x="model", y="accuracy", hue="prompt", markers="o", linestyles="-")
+            plt.title("E4 KWS: Keyword Accuracy by Steering Prompt - Line")
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            plt.savefig(PLOT_DIR / "e4_kws_steerability_acc_line.png")
+            plt.close()
+
+        # 3. Bar: false alarm rate per prompt per model
+        if "false_alarm" in df_e4k.columns:
+            far_grp = df_e4k.groupby(["model", "prompt"])["false_alarm"].mean().reset_index()
+            far_grp.rename(columns={"false_alarm": "FAR"}, inplace=True)
+            plt.figure(figsize=(12, 6))
+            sns.barplot(data=far_grp, x="model", y="FAR", hue="prompt")
+            plt.title("E4 KWS: False Alarm Rate by Steering Prompt - Bar")
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            plt.savefig(PLOT_DIR / "e4_kws_steerability_far_bar.png")
+            plt.close()
+
+        # 4. Box: per-utterance accuracy distribution per prompt
+        if "correct" in df_e4k.columns:
+            plt.figure(figsize=(14, 6))
+            sns.boxplot(data=df_e4k, x="prompt", y="correct", hue="model")
+            plt.title("E4 KWS: Per-Utterance Correct Rate Distribution per Prompt - Box")
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            plt.savefig(PLOT_DIR / "e4_kws_steerability_box.png")
+            plt.close()
+
+        # 5. Side-by-side comparison: noisy-only accuracy per prompt
+        if "condition" in df_e4k.columns and "correct" in df_e4k.columns:
+            noisy_k = df_e4k[df_e4k["condition"] == "noisy"]
+            plt.figure(figsize=(12, 6))
+            sns.barplot(data=noisy_k, x="prompt", y="correct", hue="model")
+            plt.title("E4 KWS: Noisy Accuracy per Prompt (all models) - Bar")
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            plt.savefig(PLOT_DIR / "e4_kws_noisy_acc_by_prompt_bar.png")
+            plt.close()
+
     log.info(f"  → Plots saved to {PLOT_DIR}")
 
 
@@ -828,14 +933,14 @@ def build_summary(smoke: bool) -> None:
             entry["kws_acc_noisy"] = round(float(noisy_k["correct"].mean()), 4) if not noisy_k.empty else None
             entry["kws_far"] = round(float(kws["false_alarm"].mean()), 4) if not kws.empty else None
 
-        # E2 semantic gap
+        # E2 BIR (Background Injection Rate)
         e2_f = RESULTS / "e2_semantic.csv"
         if e2_f.exists() and e2_f.stat().st_size > 10:
             try:
                 e2 = pd.read_csv(e2_f)
                 e2m = e2[e2["model"] == mid]
-                if not e2m.empty and "semantic_gap" in e2m.columns:
-                    entry["semantic_gap_mean"] = round(float(e2m["semantic_gap"].mean()), 4)
+                if not e2m.empty and "bir" in e2m.columns:
+                    entry["bir_mean"] = round(float(e2m["bir"].mean()), 4)
             except Exception:
                 pass
 
@@ -862,6 +967,7 @@ def main() -> None:
     score_e2(smoke=args.smoke_test)
     score_e3(smoke=args.smoke_test)
     score_e4(smoke=args.smoke_test)
+    score_e4_kws(smoke=args.smoke_test)
     build_summary(smoke=args.smoke_test)
     plot_all_results(smoke=args.smoke_test)
 
