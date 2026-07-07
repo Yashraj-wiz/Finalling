@@ -5,3 +5,7 @@ modal_run*.log
 # ── Temporary / Scratch Files ─────────────────────────────────────────────────
 asr_check.jsonl
 check_progress.py
+check_dupes.py
+check_progress_exact.py
+dedup_run.py
+old_reference_scripts/
