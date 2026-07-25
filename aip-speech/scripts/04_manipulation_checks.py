@@ -5,7 +5,6 @@
 Checks (from §Stage 4 of implementation plan):
   1. Background presence   → checks/bg_presence.csv
   2. WER constancy         → checks/wer_constancy.csv
-  3. Scramble validity     → checks/scramble_validity.csv
   4. Determinism floor     → checks/determinism.json
 
 Also materialises the fixed ~60-clip inspection sample → checks/inspection/

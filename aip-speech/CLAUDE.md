@@ -13,10 +13,10 @@
 | 0 | `setup.sh` | ✅ written | Install deps via venv + pip |
 | 1 | `scripts/01_download.py` | ✅ written | Download ESC-50, MS-SNSD, MUSAN, NOISEX, LibriSpeech, SpeechCommands, SAA; resumable |
 | 2 | `scripts/02_build_banks.py` | ✅ written | Build ASR/KWS/SAA item banks; CV streamed |
-| 3 | `scripts/03_curate_battery.py` | ✅ written | Curate ~20 backgrounds, scrambled twins, all descriptors, freeze prereg |
-| 4 | `scripts/04_manipulation_checks.py` | ✅ written | bg_presence, wer_constancy, scramble_validity, determinism; materialise inspection sample |
+| 3 | `scripts/03_curate_battery.py` | ✅ written | Curate ~20 backgrounds, all descriptors, freeze prereg |
+| 4 | `scripts/04_manipulation_checks.py` | ✅ written | bg_presence, wer_constancy, determinism; materialise inspection sample |
 | 5 | `scripts/05_inference.py` | ✅ written | All **6** model adapters (+ Qwen2.5-Omni-7B); 8-bit/fp16 precision; one-at-a-time GPU; row-by-row JSONL; resumable |
-| 6 | `scripts/06_score_metrics.py` | ✅ written | WER/CER/FAR/Miss/BIR/TIR/DRI/RER scoring for all experiments |
+| 6 | `scripts/06_score_metrics.py` | ✅ written | WER/CER/FAR/Miss/TIR/DRI/RER scoring for all experiments |
 | 7 | `scoring/analyse.py` | ✅ written | C-PROFILE OLS regression + bootstrap CI + VIF; C-FAIR permutation test; C-INJECT |
 | 8 | `scoring/figures.py` | ✅ written | Figs 1–3 (main paper) + Figs A1–A5 (appendix) as PDF+PNG |
 

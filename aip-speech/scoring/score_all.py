@@ -4,7 +4,7 @@ scoring/score_all.py — Stage 6: compute all metrics from inference JSONL outpu
 
 Runs scorers for every experiment:
   E1: WER/CER (ASR), Accuracy/FAR/Miss (KWS)
-  E2: ΔWER real vs scrambled, BIR, TIR
+  E2: TIR
   E3: per-subgroup ΔWER, Robustness Gap, DRI
   E4: RER (if steer outputs exist)
 
@@ -178,7 +178,7 @@ def _kws_targets() -> list[str]:
     return ["yes","no","up","down","left","right","on","off","stop","go"]
 
 
-# ── E2 scoring: BIR, TIR ──────────────────────────────────────────────────────
+# ── E2 scoring: TIR ───────────────────────────────────────────────────────────
 def score_e2(smoke: bool) -> None:
     log.info("[E2] Scoring real + injection rates...")
     battery_df = _load_battery_df()
@@ -207,15 +207,11 @@ def score_e2(smoke: bool) -> None:
                 wer_clean = _wer(ref, hyp_clean) if hyp_clean else float("nan")
                 dwer_real = wer_real - wer_clean
 
-                # BIR: inserted tokens matching background's label vocabulary
-                bir = _compute_bir(hyp_real, ref, bg_id)
-
                 records_asr.append({
                     "model": model_id,
                     "speech_id": r_row["speech_id"],
                     "background_id": bg_id,
                     "dwer_real": round(dwer_real, 4),
-                    "bir": round(bir, 4),
                 })
 
     out = RESULTS / "e2_asr.csv"
@@ -227,28 +223,9 @@ def score_e2(smoke: bool) -> None:
     _score_tir(smoke)
 
 
-def _compute_bir(hyp: str, ref: str, bg_id: str) -> float:
-    """
-    Background-Injection Rate: fraction of inserted tokens in hyp that
-    match the background's own transcript/label vocabulary.
-    bg_id is used as a rough proxy label for the background's content.
-    """
-    import jiwer
-    try:
-        out = jiwer.process_words(str(ref), str(hyp))
-        insertions = [w for op, _, words in out.alignments[0]
-                      if op == "insert" for w in (words if isinstance(words, list) else [])]
-    except Exception:
-        insertions = []
-    if not insertions:
-        return 0.0
-    bg_vocab = set(bg_id.lower().replace("_", " ").split())
-    hits = sum(1 for w in insertions if w.lower() in bg_vocab)
-    return hits / len(insertions)
-
 
 def _score_tir(smoke: bool) -> None:
-    """TIR = FAR specifically on injection probes vs scrambled vs generic noise."""
+    """TIR = FAR specifically on injection probes vs generic noise."""
     probe_ids_file = ROOT / "prereg" / "injection_probe_ids.json"
     if not probe_ids_file.exists():
         log.warning("[TIR] No injection probe IDs found. Skipping TIR.")
@@ -291,7 +268,7 @@ def score_e3(smoke: bool) -> None:
     battery_df = _load_battery_df()
     speech_like_bgs = battery_df[battery_df["category"] == "speech_like"]["bg_id"].tolist() \
         if not battery_df.empty else []
-    stationary_bgs  = battery_df[battery_df["category"] == "stationary"]["bg_id"].tolist() \
+    non_speech_bgs  = battery_df[battery_df["category"] == "non_speech"]["bg_id"].tolist() \
         if not battery_df.empty else []
 
     # Per-subgroup ΔWER
@@ -303,17 +280,17 @@ def score_e3(smoke: bool) -> None:
         for group_val, group_df in asr_df.groupby(sg):
             noisy = group_df[group_df["condition"] == "noisy"]
             mean_dwer = float(noisy["dwer"].mean()) if "dwer" in noisy.columns else float("nan")
-            # Speech-like vs stationary breakdown
+            # Speech-like vs non-speech breakdown
             dwer_sl = float(noisy[noisy["background_id"].isin(speech_like_bgs)]["dwer"].mean()) \
                 if speech_like_bgs else float("nan")
-            dwer_st = float(noisy[noisy["background_id"].isin(stationary_bgs)]["dwer"].mean()) \
-                if stationary_bgs else float("nan")
+            dwer_ns = float(noisy[noisy["background_id"].isin(non_speech_bgs)]["dwer"].mean()) \
+                if non_speech_bgs else float("nan")
             records.append({
                 "subgroup_type":  sg,
                 "subgroup_value": group_val,
                 "mean_dwer":      round(mean_dwer, 4),
                 "dwer_speech_like":  round(dwer_sl, 4),
-                "dwer_stationary":   round(dwer_st, 4),
+                "dwer_non_speech":   round(dwer_ns, 4),
                 "n_items":        len(noisy),
             })
 

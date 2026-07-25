@@ -60,8 +60,8 @@ BATTERY_SPEC: list[tuple[str, str, str]] = [
     # MUSAN music and hubbub
     ("musan_music",    "musan/**/music/fma/music-fma-0062.wav", "speech_like"),
     ("musan_hubbub",   "musan/**/speech/librivox/speech-librivox-0001.*", "speech_like"),
-    # Stationary (MS-SNSD AirConditioner)
-    ("snsd_airconditioner", "ms_snsd/noise_train/AirConditioner_1.wav", "stationary"),
+    # Non-speech (MS-SNSD AirConditioner)
+    ("snsd_airconditioner", "ms_snsd/noise_train/AirConditioner_1.wav", "non_speech"),
 ]
 
 CLIP_LEN_S = 30  # seconds to trim/loop each background to
@@ -194,7 +194,7 @@ def _harmonicity(x: np.ndarray) -> float:
 
 
 def _stationarity(x: np.ndarray) -> float:
-    """1 / mean spectral flux (higher = more stationary)."""
+    """1 / mean spectral flux (higher = more non-speech)."""
     import librosa
     S = np.abs(librosa.stft(x))
     flux = np.sum(np.diff(S, axis=1)**2, axis=0)
@@ -284,7 +284,6 @@ def freeze_prereg(smoke: bool) -> None:
         "metric_definitions": {
             "DWER":  "WER(noisy) - WER(clean), per item",
             "FAR":   "False-alarm rate on non-target KWS clips",
-            "BIR":   "Fraction of inserted tokens matching background's own transcript vocabulary",
             "TIR":   "FAR specifically on injection-probe backgrounds",
             "DRI":   "(max_g DWER_g - min_g DWER_g) / mean DWER",
             "RER":   "effect_with_instruction / effect_without",

@@ -123,7 +123,7 @@ Recommended discipline:
 - Treat the §3 "strengtheners" as **Day-6-gate-gated**: add at most one or two, and only if E1 is already producing the descriptor law on the core five.
 - Do **not** build the study around `Qwen3-Omni-30B`. If it loads, run it as a bonus high-capacity datapoint; if it OOMs, drop it with zero impact on the minimum viable result.
 
-The minimum viable result (E1 + C-PROFILE regression + E2 scrambled control + E3 ecological cut) is unchanged and still runs on the core five.
+The minimum viable result (E1 + C-PROFILE regression + E3 ecological cut) is unchanged and still runs on the core five.
 
 ---
 

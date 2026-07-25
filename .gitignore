@@ -9,3 +9,17 @@ check_dupes.py
 check_progress_exact.py
 dedup_run.py
 old_reference_scripts/
+
+# ── Untracked Local Files ──────────────────────────────────────────────────────
+env.txt
+*inference backup*/
+*inference_after_airport/
+qwen2_audio_7b/
+aip-speech/qwen2_audio_7b/
+final_impact_speech_results/
+*.zip
+inference_1/
+itembanks_old/
+replace_stationary.py
+acl_latex.tex
+

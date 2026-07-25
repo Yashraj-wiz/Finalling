@@ -42,7 +42,7 @@ def main():
     # 3. Create necessary folders
     print("\n--- Creating Directories ---")
     dirs_to_create = [
-        "data/bg", "data/bg_raw", "data/bg_scrambled", 
+        "data/bg", "data/bg_raw", 
         "data/speech_asr", "data/speech_kws", "data/speech_saa", 
         "data/esc50", "data/ms_snsd", "data/musan", "data/noisex",
         "descriptors", "itembanks", "prereg", "manifests", 

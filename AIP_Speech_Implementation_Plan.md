@@ -15,7 +15,6 @@
 aip-speech/
 ├── data/
 │   ├── bg/                  # ~20 curated real backgrounds (ESC-50 + MS-SNSD + MUSAN + NOISEX)  (~1.8 GB)
-│   ├── bg_scrambled/        # 8 phase-scrambled twins of the speech-like backgrounds            (~50 MB)
 │   ├── speech_asr/          # LibriSpeech subset + Common Voice (streamed, accent-labelled)      (~350 MB)
 │   ├── speech_kws/          # Google Speech Commands v2 subset (+ held-out injection-probe IDs)  (~150 MB)
 │   └── speech_saa/          # Speech Accent Archive subset (controlled fairness)                 (~200 MB)
@@ -30,7 +29,7 @@ aip-speech/
 └── checks/
     ├── inspection/                   # persisted ~60-clip sample for listening + checks
     ├── mix_diagnostics.csv           # per-stimulus: achieved SNR, LUFS, clip flag, bg-presence, mix-WER
-    ├── bg_presence.csv  wer_constancy.csv  scramble_validity.csv  determinism.json
+    ├── bg_presence.csv  wer_constancy.csv  determinism.json
 ```
 **Total persisted ≈ 2.5 GB.** Source corpora are real and citable; the stimulus *set* never lands on disk.
 
@@ -42,7 +41,7 @@ Download **subsets**; stream the big one.
 
 ```bash
 git clone https://github.com/karolpiczak/ESC-50 data/esc50           # ~600 MB diverse non-speech
-# MS-SNSD: clone MS-SNSD repository (real babble/speech-like + stationary)
+# MS-SNSD: clone MS-SNSD repository (real babble/speech-like + non-speech)
 git clone --depth 1 https://github.com/microsoft/MS-SNSD.git data/ms_snsd
 # NOISEX-92 babble (canonical multi-talker babble), MUSAN speech/music subset — fetch a handful of files
 # LibriSpeech test-clean subset (~350 MB); Speech Commands v2 subset; Speech Accent Archive subset
@@ -65,26 +64,16 @@ itembanks/saa.jsonl : {id, wav, transcript(fixed paragraph), accent, gender}
 ## Stage 2 — Battery, descriptors, scrambles, pre-registration (Day 2)
 
 ### 2.1 Curate ~20 real backgrounds
-From the corpora above: ~12 ESC-50 non-speech events; 5 MS-SNSD/NOISEX/MUSAN speech-like (cafeteria, restaurant, square, office, NOISEX-babble); 2–3 MUSAN music/hubbub; 1 stationary (AirConditioner / MUSAN-noise). Take 1 channel, trim/loop to a common length, high-pass DC, loudness-normalize each to a fixed **background reference**.
+From the corpora above: ~12 ESC-50 non-speech events; 5 MS-SNSD/NOISEX/MUSAN speech-like (cafeteria, restaurant, square, office, NOISEX-babble); 2–3 MUSAN music/hubbub; 1 non-speech (AirConditioner / MUSAN-noise). Take 1 channel, trim/loop to a common length, high-pass DC, loudness-normalize each to a fixed **background reference**.
 
 ### 2.2 Injection-probe backgrounds (reproducible, no synthesis)
 A **fixed published list of held-out Speech Commands clip IDs** that utter the target keyword/digit; these are mixed as backgrounds at 0 dB. The list of IDs ships in the released manifest → anyone regenerates the identical probes.
-
-### 2.3 Scrambled twins (speech-like subset only)
-```python
-import numpy as np
-def phase_scramble(x):
-    X = np.fft.rfft(x); mag = np.abs(X)
-    ph = np.exp(1j*np.random.default_rng(0).uniform(0,2*np.pi,size=mag.shape))
-    return np.fft.irfft(mag*ph, n=len(x)).astype(np.float32)   # same spectrum+energy, no structure
-```
-Validate (Stage 4) that twins carry no recoverable words.
 
 ### 2.4 Descriptors → `descriptors/battery.parquet`
 `speech_likeness` (VAD/speech-classifier on bg), `linguistic_content` (Whisper-on-bg weighted word count), `mod_2to8Hz`, `spectral_overlap(300–3400 Hz)`, `harmonicity` (HNR), `stationarity` (1/spectral flux), `onset_density`, `loudness` (LUFS), `audioset_group`.
 
 ### 2.5 Freeze `prereg/prereg.json`
-Battery IDs + source corpus IDs, descriptor defs, SNR `{+10,+5,0}`, scramble method + which backgrounds, accent grid, metric defs, significance rule. **Nothing changes after the first model run.**
+Battery IDs + source corpus IDs, descriptor defs, SNR `{+10,+5,0}`, which backgrounds, accent grid, metric defs, significance rule. **Nothing changes after the first model run.**
 
 ---
 
@@ -130,10 +119,9 @@ def diagnostics(row, y, s):                     # log "what happened" without sa
 Run on the persisted inspection sample + a random regenerated subset:
 1. **Background presence** — event/scene classifier confirms the intended background at each SNR → `bg_presence.csv`.
 2. **Intelligibility constancy** — Whisper WER on the mix does not vary wildly across backgrounds at fixed SNR → `wer_constancy.csv`.
-3. **Scramble validity** — twins match the real spectrum within tolerance and yield ~zero linguistic content → `scramble_validity.csv`.
 4. **Determinism floor (replaces jitter floor)** — 50 clean items run twice, greedy; confirm identical outputs; record residual as one number → `determinism.json`.
 
-**Gate:** low background-presence or words-in-twins ⇒ fix curation/scrambling first.
+**Gate:** low background-presence ⇒ fix curation first.
 
 ---
 
@@ -154,7 +142,7 @@ for row in manifest:                                   # metadata only
     out = model.generate(wav, PROMPT[row.task])
     write_jsonl(f"inference/{model}/{row.task}.jsonl", {**row._asdict(), "raw": out})
 ```
-**Batching order:** E1 (ASR+KWS) across 5 models (Days 4–5) → **Day-6 gate** → E2 scrambled + E3 SAA + text-oracle + (stretch) E4/extended (Days 6–7). Greedy decoding except the determinism check.
+**Batching order:** E1 (ASR+KWS) across 5 models (Days 4–5) → **Day-6 gate** → E3 SAA + text-oracle + (stretch) E4/extended (Days 6–7). Greedy decoding except the determinism check.
 
 **Acceptance:** output count == manifest rows per (model, task); parse-failure rate low.
 
@@ -163,24 +151,24 @@ for row in manifest:                                   # metadata only
 ## Stage 6 — Scoring, by experiment (Day 8)
 
 - **E1 (ASR, T1.1):** `jiwer` WER/CER; sub/del/ins split; ΔWER vs clean per item. **(KWS, T1.2):** Accuracy, FAR on non-target backgrounds, Miss.
-- **E2 (T2.1):** ΔWER(real) − ΔWER(scrambled) @ 0 dB; **BIR** = inserted tokens matching the background's own transcript/label vocabulary. **(T2.2):** **TIR** = FAR on injection probes vs scrambled vs generic-noise.
+- **E2 (T2.1):** **TIR** = FAR on injection probes vs generic-noise.
 - **E3 (T3.1 ecological):** per-subgroup ΔWER from the accent-labelled ASR run; **Robustness Gap**, **DRI**. **(T3.2 controlled):** content-matched per-accent ΔWER on SAA; descriptor×subgroup interaction.
 - **E4 (stretch):** **RER** = effect_with_instruction / effect_without; compliance rate.
-- **Significance:** paired permutation tests across items (p<0.05, corrected); semantic claims require real>scrambled; energetic claims require SNR-monotonicity.
+- **Significance:** paired permutation tests across items (p<0.05, corrected); energetic claims require SNR-monotonicity.
 
 ---
 
 ## Stage 7 — Analysis (Days 8–9)
 
-- **C-PROFILE:** mixed-effects `Δ ~ SNR + descriptors + (1|item)+(1|model)+(1|background)`; standardized coefficients, bootstrap CIs, VIF; dissociate via NOISEX-babble vs MUSAN-stationary. → **Fig 1**.
+- **C-PROFILE:** mixed-effects `Δ ~ SNR + descriptors + (1|item)+(1|model)+(1|background)`; standardized coefficients, bootstrap CIs, VIF; dissociate via NOISEX-babble vs MUSAN-non-speech. → **Fig 1**.
 - **C-FAIR:** Robustness Gap/DRI; descriptor×subgroup interaction; clean-gap overlay. → **Fig 3**.
-- **C-INJECT:** error taxonomy + BIR/TIR; real − scrambled. → **Fig 2** (+ appendix taxonomy).
+- **C-INJECT:** error taxonomy + TIR. → **Fig 2** (+ appendix taxonomy).
 
 ---
 
 ## Stage 8 — Reporting (Days 9–10)
 
-**Main:** Fig 1 (descriptor law), Fig 2 (real vs scrambled), Fig 3 (disparate robustness); Table 1 (model × task summary), Table 2 (regression). **Appendix:** SNR dose–response, error/injection taxonomy, steerability RER, battery descriptor-space map, architecture view, per-background leaderboard, manipulation-check tables, full subgroup table, prior-art differentiation. Write the 4-page draft from E1 + C-PROFILE + E2 scrambled + E3 ecological cut. **Day-6 gate:** no descriptor law and no disparity ⇒ pivot to the robustness-null framing.
+**Main:** Fig 1 (descriptor law), Fig 3 (disparate robustness); Table 1 (model × task summary), Table 2 (regression). **Appendix:** SNR dose–response, error/injection taxonomy, steerability RER, battery descriptor-space map, architecture view, per-background leaderboard, manipulation-check tables, full subgroup table, prior-art differentiation. Write the 4-page draft from E1 + C-PROFILE + E3 ecological cut. **Day-6 gate:** no descriptor law and no disparity ⇒ pivot to the robustness-null framing.
 
 ---
 
@@ -190,7 +178,6 @@ for row in manifest:                                   # metadata only
 - **Never persist the stimulus set;** rely on `materialize()` + the inspection sample + `mix_diagnostics.csv` for observability.
 - **Loudness before SNR;** log achieved SNR per stimulus to catch mixing bugs.
 - **Greedy decoding** for core metrics → determinism check suffices; significance via paired permutation tests.
-- **Keep the 8 scrambled twins** — the cheap control that turns "noise hurts ASR" into "*words* hurt ASR." Don't over-build (speech-like backgrounds only, 0 dB only).
 - **All backgrounds named + public;** ship source IDs + seeds; no synthesized babble.
 - **Bake demographics into the ASR bank** so E3 ecological is a post-hoc cut, not a second grid.
 - **Watch model quirks:** Kimi defaults to ASR (force the task); speech-out models need Whisper transcription; quantized models need a sanity item first.

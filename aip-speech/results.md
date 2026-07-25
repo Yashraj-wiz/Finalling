@@ -10,7 +10,7 @@
 |-------|--------|-------|
 | Background presence | ⬜ pending | |
 | WER constancy | ⬜ pending | |
-| Scramble validity | ⬜ pending | |
+
 | Determinism floor | ⬜ pending | |
 
 ---
@@ -37,23 +37,34 @@
 | Gemma-3n-E4B | — | — | — | — |
 | Kimi-Audio-7B | — | — | — | — |
 
+### T1.3 SQA (Spoken SQuAD)
+
+| Model | Clean EM | Clean F1 | Clean Hallucination | Noisy EM | Noisy F1 | Noisy Hallucination |
+|-------|----------|----------|---------------------|----------|----------|---------------------|
+| Qwen2.5-Omni-3B | 0.690 | 0.701 | 0.350 | 0.655 | 0.682 | 0.350 |
+| Qwen2-Audio-7B | 0.340 | 0.393 | 0.710 | 0.338 | 0.395 | 0.714 |
+| Qwen2.5-Omni-7B | 0.100 | 0.163 | 1.000 | 0.078 | 0.132 | 1.000 |
+| Phi-4-multimodal | failed | failed | failed | failed | failed | failed |
+| Gemma-3n-E4B | failed | failed | failed | failed | failed | failed |
+| Kimi-Audio-7B | skipped | skipped | skipped | skipped | skipped | skipped |
+
 ---
 
 ## E2 — Semantic vs Energetic
 
-### T2.1 ASR: real vs scrambled @ 0 dB
+### T2.1 ASR: semantic gap @ 0 dB
 
-| Background | ΔWER real | ΔWER scrambled | Gap (semantic) | BIR |
-|------------|-----------|----------------|----------------|-----|
-| PCAFETER | — | — | — | — |
-| PRESTO | — | — | — | — |
-| SPSQUARE | — | — | — | — |
-| OMEETING | — | — | — | — |
-| NOISEX-babble | — | — | — | — |
+| Background | ΔWER | Gap (semantic) |
+|------------|------|----------------|
+| PCAFETER | — | — |
+| PRESTO | — | — |
+| SPSQUARE | — | — |
+| OMEETING | — | — |
+| NOISEX-babble | — | — |
 
 ### T2.2 KWS: trigger injection
 
-| Background | TIR (real) | TIR (scrambled) | TIR (generic) |
+| Background | TIR | TIR (generic) |
 |------------|------------|-----------------|---------------|
 | Injection probes | — | — | — |
 
@@ -63,13 +74,13 @@
 
 ### T3.1 Ecological (Common Voice, accent/gender)
 
-| Subgroup | Clean WER | ΔWER speech-like | ΔWER stationary | Robustness Gap | DRI |
+| Subgroup | Clean WER | ΔWER speech-like | ΔWER non-speech | Robustness Gap | DRI |
 |----------|-----------|------------------|-----------------|----------------|-----|
 | — | — | — | — | — | — |
 
 ### T3.2 Controlled (Speech Accent Archive)
 
-| Accent Group | Clean WER | ΔWER @ 0 dB | Speech-like ΔWER | Stationary ΔWER |
+| Accent Group | Clean WER | ΔWER @ 0 dB | Speech-like ΔWER | Non-speech ΔWER |
 |--------------|-----------|-------------|------------------|-----------------|
 | — | — | — | — | — |
 

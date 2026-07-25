@@ -4,7 +4,7 @@
 
 Experiments scored:
   E1  WER/CER + sub/del/ins + ΔWER (ASR);  Accuracy/FAR/Miss (KWS)
-  E2  ΔWER on speech-like noise, BIR (ASR);   TIR on injection probes (KWS)
+  E2  ΔWER on speech-like noise;   TIR on injection probes (KWS)
   E3  Per-subgroup ΔWER, Robustness Gap, DRI;  SAA controlled cut
   E4  Residual-Effect Ratio (RER), compliance rate
 
@@ -30,7 +30,7 @@ from utils import ROOT, get_logger, jsonl_read
 log = get_logger("06_score_metrics")
 
 RESULTS   = ROOT / "results"
-INFER     = ROOT / "inference"
+INFER     = ROOT / "inference_1"
 BATTERY_F = ROOT / "descriptors" / "battery.parquet"
 SMOKE_N   = 10
 
@@ -71,14 +71,27 @@ def _load_inference(model_id: str, task: str) -> pd.DataFrame:
 
 def _load_battery() -> pd.DataFrame:
     if BATTERY_F.exists():
-        return pd.read_parquet(BATTERY_F)
+        df = pd.read_parquet(BATTERY_F)
+        return df
     return pd.DataFrame()
+
+
+def _normalize_asr_text(s: str) -> str:
+    import re, string
+    s = str(s).lower()
+    # Replace punctuation with spaces
+    s = re.sub(rf"[{re.escape(string.punctuation)}]", " ", s)
+    # Normalize whitespaces
+    s = " ".join(s.split())
+    return s
 
 
 def _wer(ref: str, hyp: str) -> float:
     import jiwer
     try:
-        return float(jiwer.wer(str(ref).strip(), str(hyp).strip()))
+        ref_norm = _normalize_asr_text(ref)
+        hyp_norm = _normalize_asr_text(hyp)
+        return float(jiwer.wer(ref_norm, hyp_norm))
     except Exception:
         return float("nan")
 
@@ -86,7 +99,9 @@ def _wer(ref: str, hyp: str) -> float:
 def _cer(ref: str, hyp: str) -> float:
     import jiwer
     try:
-        return float(jiwer.cer(str(ref).strip(), str(hyp).strip()))
+        ref_norm = _normalize_asr_text(ref)
+        hyp_norm = _normalize_asr_text(hyp)
+        return float(jiwer.cer(ref_norm, hyp_norm))
     except Exception:
         return float("nan")
 
@@ -95,7 +110,9 @@ def _error_counts(ref: str, hyp: str) -> dict:
     """Return substitution, deletion, insertion counts."""
     import jiwer
     try:
-        out = jiwer.process_words(str(ref).strip(), str(hyp).strip())
+        ref_norm = _normalize_asr_text(ref)
+        hyp_norm = _normalize_asr_text(hyp)
+        out = jiwer.process_words(ref_norm, hyp_norm)
         return {"substitutions": int(out.substitutions),
                 "deletions": int(out.deletions),
                 "insertions": int(out.insertions)}
@@ -105,6 +122,13 @@ def _error_counts(ref: str, hyp: str) -> dict:
 
 def _save(df: pd.DataFrame, name: str) -> Path:
     out = RESULTS / name
+    if df.empty:
+        if out.exists():
+            try:
+                out.unlink()
+            except Exception:
+                pass
+        return out
     df.to_csv(out, index=False)
     log.info(f"  → {out}  ({len(df)} rows)")
     return out
@@ -171,6 +195,8 @@ def score_e1_kws(smoke: bool) -> pd.DataFrame:
             if hyp_raw == "__error__":
                 continue
             hyp_kw   = hyp_raw.split()[0] if hyp_raw else "silence"
+            import string
+            hyp_kw   = hyp_kw.strip(string.punctuation)
             correct  = (hyp_kw == ref_kw) if is_target else (hyp_kw not in KWS_TARGETS)
             false_alarm = (not is_target) and (hyp_kw in KWS_TARGETS)
             records.append({
@@ -192,12 +218,93 @@ def score_e1_kws(smoke: bool) -> pd.DataFrame:
     return out
 
 
+def _normalize_answer(s: str) -> str:
+    """Lower text and remove punctuation, articles and extra whitespace."""
+    import re, string
+    def remove_articles(text):
+        return re.sub(r'\b(a|an|the)\b', ' ', text)
+    def white_space_fix(text):
+        return ' '.join(text.split())
+    def remove_punc(text):
+        exclude = set(string.punctuation)
+        return ''.join(ch for ch in text if ch not in exclude)
+    def lower(text):
+        return text.lower()
+    return white_space_fix(remove_articles(remove_punc(lower(s))))
+
+def _exact_match_score(prediction: str, ground_truth: str) -> float:
+    return float(_normalize_answer(prediction) == _normalize_answer(ground_truth))
+
+def _f1_score(prediction: str, ground_truth: str) -> float:
+    prediction_tokens = _normalize_answer(prediction).split()
+    ground_truth_tokens = _normalize_answer(ground_truth).split()
+    common = set(prediction_tokens) & set(ground_truth_tokens)
+    if not common:
+        return 0.0
+    # count how many times common tokens appear in prediction (to handle duplicates if needed)
+    num_same = sum(1 for token in prediction_tokens if token in common)
+    precision = 1.0 * num_same / len(prediction_tokens)
+    recall = 1.0 * num_same / len(ground_truth_tokens)
+    f1 = (2 * precision * recall) / (precision + recall)
+    return float(f1)
+
+def _hallucination_rate(prediction: str, passage: str) -> float:
+    """Percentage of predicted tokens that do not appear in the source passage."""
+    pred_tokens = set(_normalize_answer(prediction).split())
+    passage_tokens = set(_normalize_answer(passage).split())
+    if not pred_tokens:
+        return 0.0
+    hallucinated = pred_tokens - passage_tokens
+    return len(hallucinated) / len(pred_tokens)
+
+# ── E1-SQA: EM, F1, Hallucination ───────────────────────────────────────────
+def score_e1_sqa(smoke: bool) -> pd.DataFrame:
+    log.info("[E1-SQA] Scoring EM / F1 / Hallucination ...")
+    records = []
+    for mid in _all_models():
+        df = _load_inference(mid, "sqa")
+        if df.empty:
+            continue
+        if smoke:
+            df = df.head(SMOKE_N)
+        for _, row in df.iterrows():
+            ref_ans   = str(row.get("answer", ""))
+            passage   = str(row.get("passage_text", ""))
+            hyp_raw   = str(row.get("raw", ""))
+            if hyp_raw == "__ERROR__":
+                continue
+                
+            em = _exact_match_score(hyp_raw, ref_ans)
+            f1 = _f1_score(hyp_raw, ref_ans)
+            hal = _hallucination_rate(hyp_raw, passage)
+            
+            records.append({
+                "model": mid,
+                "speech_id":     row.get("speech_id", ""),
+                "background_id": row.get("background_id", ""),
+                "snr_db":        row.get("snr_db", ""),
+                "condition":     row.get("condition", ""),
+                "em": round(em, 4),
+                "f1": round(f1, 4),
+                "hallucination": round(hal, 4),
+            })
+            
+    out = pd.DataFrame(records)
+    if not out.empty:
+        _save(out, "e1_sqa.csv")
+    return out
+
+
 def _score_e1_profile(smoke: bool) -> None:
     log.info("[E1-Profile] Scoring descriptor regressions ...")
     asr_f = RESULTS / "e1_asr.csv"
     if not asr_f.exists():
         return
-    df_asr = pd.read_csv(asr_f)
+    try:
+        df_asr = pd.read_csv(asr_f)
+    except Exception as e:
+        log.warning(f"[E1-Profile] Could not read {asr_f}: {e}. Skipping profiling.")
+        return
     bat = _load_battery()
     if bat.empty:
         return
@@ -205,43 +312,21 @@ def _score_e1_profile(smoke: bool) -> None:
     if not merged.empty:
         _save(merged, "e1_profile.csv")
         
-        # Calculate speech_like vs stationary dwer comparison
+        # Calculate speech_like vs non-speech dwer comparison
         if "category" in merged.columns:
-            comp = merged[merged["category"].isin(["speech_like", "stationary"])]
+            comp = merged[merged["category"].isin(["speech_like", "non_speech"])]
             if not comp.empty:
                 summary = comp.groupby(["model", "category"])["dwer"].mean().reset_index()
-                _save(summary, "e1_speech_vs_stationary.csv")
-                log.info("[E1-Profile] Speech-like vs Stationary ΔWER comparison:")
+                _save(summary, "e1_speech_vs_non_speech.csv")
+                log.info("[E1-Profile] Speech-like vs Non-speech ΔWER comparison:")
                 for _, row in summary.iterrows():
                     log.info(f"  {row['model']} / {row['category']}: Mean ΔWER = {row['dwer']:.4f}")
 
 
-# ── E2-ASR: BIR ──────────────────────────────────────────────────────────────
-def _compute_bir(hyp: str, ref: str, bg_id: str) -> float:
-    """Background-Injection Rate: fraction of inserted tokens matching bg vocab."""
-    import jiwer
-    try:
-        out = jiwer.process_words(str(ref).strip(), str(hyp).strip())
-        # Extract inserted words from alignment
-        inserted = []
-        for align in out.alignments:
-            for chunk in align:
-                if chunk.type == "insert":
-                    hyp_tokens = str(hyp).strip().split()
-                    for i in range(chunk.hyp_start_idx, chunk.hyp_end_idx):
-                        if i < len(hyp_tokens):
-                            inserted.append(hyp_tokens[i].lower())
-    except Exception:
-        inserted = []
-    if not inserted:
-        return 0.0
-    bg_vocab = set(bg_id.lower().replace("_", " ").split())
-    hits = sum(1 for w in inserted if w in bg_vocab)
-    return hits / len(inserted)
-
+# ── E2-ASR ───────────────────────────────────────────────────────────────────
 
 def score_e2(smoke: bool) -> None:
-    log.info("[E2] Scoring real + BIR + TIR ...")
+    log.info("[E2] Scoring real + TIR ...")
     bat = _load_battery()
     speech_like = (bat[bat.get("category", pd.Series()) == "speech_like"]["bg_id"].tolist()
                    if "category" in bat.columns else [])
@@ -271,13 +356,10 @@ def score_e2(smoke: bool) -> None:
                 wer_c = _wer(ref, hyp_c) if hyp_c else float("nan")
                 dwer_r = wer_r - wer_c
 
-                bir = _compute_bir(hyp_r, ref, bg_id)
-
                 records.append({
                     "model": mid, "speech_id": rr["speech_id"],
                     "background_id": bg_id,
                     "dwer_real": round(dwer_r, 4),
-                    "bir": round(bir, 4),
                 })
 
     _save(pd.DataFrame(records), "e2_semantic.csv")
@@ -305,6 +387,8 @@ def _score_tir(smoke: bool) -> None:
         for _, row in probes.iterrows():
             raw = str(row.get("raw", "")).lower().strip()
             predicted = raw.split()[0] if raw else ""
+            import string
+            predicted = predicted.strip(string.punctuation)
             records.append({
                 "model": mid,
                 "probe_id":      row.get("speech_id", ""),
@@ -330,13 +414,13 @@ def score_e3(smoke: bool) -> None:
     asr_items = {r["id"]: r.get("source", "") for r in jsonl_read(ROOT / "itembanks" / "asr.jsonl")}
     asr["source"] = asr["speech_id"].map(asr_items)
     
-    # Filter only Common Voice for Task 3.1
-    asr = asr[asr["source"] == "common_voice_17"]
+    # We no longer filter only for Common Voice, so LibriSpeech is included in gender/accent analysis!
+    # asr = asr[asr["source"] == "common_voice_17"]
 
     bat = _load_battery()
     sl_ids = (bat[bat["category"] == "speech_like"]["bg_id"].tolist()
               if "category" in bat.columns else [])
-    st_ids = (bat[bat["category"] == "stationary"]["bg_id"].tolist()
+    ns_ids = (bat[bat["category"] == "non_speech"]["bg_id"].tolist()
               if "category" in bat.columns else [])
 
     records = []
@@ -350,15 +434,15 @@ def score_e3(smoke: bool) -> None:
                 mean_dw = float(noisy["dwer"].mean()) if "dwer" in noisy.columns else float("nan")
                 dw_sl = float(noisy[noisy["background_id"].isin(sl_ids)]["dwer"].mean()) \
                     if sl_ids and "dwer" in noisy.columns else float("nan")
-                dw_st = float(noisy[noisy["background_id"].isin(st_ids)]["dwer"].mean()) \
-                    if st_ids and "dwer" in noisy.columns else float("nan")
+                dw_ns = float(noisy[noisy["background_id"].isin(ns_ids)]["dwer"].mean()) \
+                    if ns_ids and "dwer" in noisy.columns else float("nan")
                 records.append({
                     "model": model_id,
                     "subgroup_type":  sg,
                     "subgroup_value": gval,
                     "mean_dwer":         round(mean_dw, 4),
                     "dwer_speech_like":  round(dw_sl, 4),
-                    "dwer_stationary":   round(dw_st, 4),
+                    "dwer_non_speech":   round(dw_ns, 4),
                     "n_items":           len(noisy),
                 })
 
@@ -430,7 +514,7 @@ def _score_e3_saa(smoke: bool) -> None:
         bat = _load_battery()
         sl_ids = (bat[bat["category"] == "speech_like"]["bg_id"].tolist()
                   if "category" in bat.columns else [])
-        st_ids = (bat[bat["category"] == "stationary"]["bg_id"].tolist()
+        ns_ids = (bat[bat["category"] == "non_speech"]["bg_id"].tolist()
                   if "category" in bat.columns else [])
 
         saa_records = []
@@ -441,14 +525,14 @@ def _score_e3_saa(smoke: bool) -> None:
                 mean_dw = float(noisy["dwer"].mean()) if "dwer" in noisy.columns else float("nan")
                 dw_sl = float(noisy[noisy["background_id"].isin(sl_ids)]["dwer"].mean()) \
                     if sl_ids and "dwer" in noisy.columns else float("nan")
-                dw_st = float(noisy[noisy["background_id"].isin(st_ids)]["dwer"].mean()) \
-                    if st_ids and "dwer" in noisy.columns else float("nan")
+                dw_ns = float(noisy[noisy["background_id"].isin(ns_ids)]["dwer"].mean()) \
+                    if ns_ids and "dwer" in noisy.columns else float("nan")
                 saa_records.append({
                     "model": model_id,
                     "accent": acc,
                     "mean_dwer": round(mean_dw, 4),
                     "dwer_speech_like": round(dw_sl, 4),
-                    "dwer_stationary": round(dw_st, 4),
+                    "dwer_non_speech": round(dw_ns, 4),
                     "n_items": len(noisy),
                 })
         _save(pd.DataFrame(saa_records), "e3_saa_fairness.csv")
@@ -549,7 +633,9 @@ def score_e4_kws(smoke: bool) -> None:
                 is_target = bool(row.get("is_target", False))
                 if hyp_raw == "__error__":
                     continue
-                hyp_kw = hyp_raw.split()[0] if hyp_raw else "silence"
+                hyp_kw   = hyp_raw.split()[0] if hyp_raw else "silence"
+                import string
+                hyp_kw   = hyp_kw.strip(string.punctuation)
                 correct      = (hyp_kw == ref_kw) if is_target else (hyp_kw not in KWS_TARGETS)
                 false_alarm  = (not is_target) and (hyp_kw in KWS_TARGETS)
                 records.append({
@@ -591,6 +677,7 @@ def plot_all_results(smoke: bool) -> None:
     sns.set_theme(style="whitegrid")
     PLOT_DIR = RESULTS / "plots"
     PLOT_DIR.mkdir(parents=True, exist_ok=True)
+    bat = _load_battery()
     
     # ── E1 General Robustness (Box, Violin, Line Graphs) ──
     asr_f = RESULTS / "e1_asr.csv"
@@ -662,27 +749,125 @@ def plot_all_results(smoke: bool) -> None:
             plt.savefig(PLOT_DIR / "fig1b_profile_modulation_line.png")
             plt.close()
 
-        # Speech-like vs Stationary category comparison plots
-        if "category" in noisy.columns:
-            comp = noisy[noisy["category"].isin(["speech_like", "stationary"])]
-            if not comp.empty:
-                # 1. Bar Plot of means
-                plt.figure(figsize=(10, 6))
-                sns.barplot(data=comp, x="model", y="dwer", hue="category")
-                plt.title("E1 ASR: Mean ΔWER in Speech-like vs Stationary Noise")
-                plt.xticks(rotation=45)
-                plt.tight_layout()
-                plt.savefig(PLOT_DIR / "e1_speech_vs_stationary_bar.png")
-                plt.close()
+        # Speech-like vs Non-speech category comparison plots (ASR, KWS, SQA)
+        comp_asr = pd.DataFrame()
+        comp_kws = pd.DataFrame()
+        comp_sqa = pd.DataFrame()
 
-                # 2. Box Plot of distributions
-                plt.figure(figsize=(10, 6))
-                sns.boxplot(data=comp, x="model", y="dwer", hue="category")
-                plt.title("E1 ASR: ΔWER Distribution in Speech-like vs Stationary Noise")
-                plt.xticks(rotation=45)
-                plt.tight_layout()
-                plt.savefig(PLOT_DIR / "e1_speech_vs_stationary_box.png")
-                plt.close()
+        if "category" in noisy.columns:
+            comp_asr = noisy[noisy["category"].isin(["speech_like", "non_speech"])].copy()
+
+        # Load and process KWS
+        kws_f = RESULTS / "e1_kws.csv"
+        if kws_f.exists() and kws_f.stat().st_size > 10:
+            try:
+                df_kws = pd.read_csv(kws_f)
+                if not df_kws.empty and "condition" in df_kws.columns:
+                    clean_kws = df_kws[df_kws["condition"] == "clean"][["model", "speech_id", "correct"]].rename(columns={"correct": "correct_clean"})
+                    df_kws = df_kws.merge(clean_kws, on=["model", "speech_id"], how="left")
+                    df_kws["dacc"] = df_kws["correct"] - df_kws["correct_clean"]
+                    # Merge with battery
+                    df_kws = df_kws.merge(bat, left_on="background_id", right_on="bg_id", how="inner")
+                    if "category" in df_kws.columns:
+                        comp_kws = df_kws[(df_kws["condition"] == "noisy") & (df_kws["category"].isin(["speech_like", "non_speech"]))].copy()
+            except Exception as e:
+                log.warning(f"[Plots] Could not process KWS category comparison: {e}")
+
+        # Load and process SQA
+        sqa_f = RESULTS / "e1_sqa.csv"
+        if sqa_f.exists() and sqa_f.stat().st_size > 10:
+            try:
+                df_sqa = pd.read_csv(sqa_f)
+                if not df_sqa.empty and "condition" in df_sqa.columns:
+                    clean_sqa = df_sqa[df_sqa["condition"] == "clean"][["model", "speech_id", "f1"]].rename(columns={"f1": "f1_clean"})
+                    df_sqa = df_sqa.merge(clean_sqa, on=["model", "speech_id"], how="left")
+                    df_sqa["df1"] = df_sqa["f1"] - df_sqa["f1_clean"]
+                    # Merge with battery
+                    df_sqa = df_sqa.merge(bat, left_on="background_id", right_on="bg_id", how="inner")
+                    if "category" in df_sqa.columns:
+                        comp_sqa = df_sqa[(df_sqa["condition"] == "noisy") & (df_sqa["category"].isin(["speech_like", "non_speech"]))].copy()
+            except Exception as e:
+                log.warning(f"[Plots] Could not process SQA category comparison: {e}")
+
+        # Generate the multi-column Bar plot
+        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+        has_bar_data = False
+        
+        # ASR Subplot
+        if not comp_asr.empty:
+            sns.barplot(data=comp_asr, x="model", y="dwer", hue="category", ax=axes[0])
+            axes[0].set_title("ASR Task: Mean ΔWER\n(Lower/Near 0 is Better)")
+            axes[0].set_ylabel("ΔWER (noisy - clean)")
+            axes[0].tick_params(axis='x', rotation=45)
+            has_bar_data = True
+        else:
+            axes[0].text(0.5, 0.5, "No ASR Data", ha="center", va="center")
+            
+        # KWS Subplot
+        if not comp_kws.empty:
+            sns.barplot(data=comp_kws, x="model", y="dacc", hue="category", ax=axes[1])
+            axes[1].set_title("KWS Task: Mean ΔAccuracy\n(Higher/Near 0 is Better)")
+            axes[1].set_ylabel("ΔAccuracy (noisy - clean)")
+            axes[1].tick_params(axis='x', rotation=45)
+            has_bar_data = True
+        else:
+            axes[1].text(0.5, 0.5, "No KWS Data", ha="center", va="center")
+
+        # SQA Subplot
+        if not comp_sqa.empty:
+            sns.barplot(data=comp_sqa, x="model", y="df1", hue="category", ax=axes[2])
+            axes[2].set_title("SQA Task: Mean ΔF1 Score\n(Higher/Near 0 is Better)")
+            axes[2].set_ylabel("ΔF1 (noisy - clean)")
+            axes[2].tick_params(axis='x', rotation=45)
+            has_bar_data = True
+        else:
+            axes[2].text(0.5, 0.5, "No SQA Data", ha="center", va="center")
+
+        if has_bar_data:
+            plt.suptitle("E1 Robustness: Speech-like vs Non-speech Noise across ASR, KWS, and SQA", fontsize=14, y=0.98)
+            plt.tight_layout()
+            plt.savefig(PLOT_DIR / "e1_speech_vs_non_speech_bar.png")
+            plt.close()
+
+        # Generate the multi-column Box plot
+        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+        has_box_data = False
+        
+        # ASR Subplot
+        if not comp_asr.empty:
+            sns.boxplot(data=comp_asr, x="model", y="dwer", hue="category", ax=axes[0])
+            axes[0].set_title("ASR Task: ΔWER Distribution")
+            axes[0].set_ylabel("ΔWER (noisy - clean)")
+            axes[0].tick_params(axis='x', rotation=45)
+            has_box_data = True
+        else:
+            axes[0].text(0.5, 0.5, "No ASR Data", ha="center", va="center")
+            
+        # KWS Subplot
+        if not comp_kws.empty:
+            sns.boxplot(data=comp_kws, x="model", y="dacc", hue="category", ax=axes[1])
+            axes[1].set_title("KWS Task: ΔAccuracy Distribution")
+            axes[1].set_ylabel("ΔAccuracy (noisy - clean)")
+            axes[1].tick_params(axis='x', rotation=45)
+            has_box_data = True
+        else:
+            axes[1].text(0.5, 0.5, "No KWS Data", ha="center", va="center")
+
+        # SQA Subplot
+        if not comp_sqa.empty:
+            sns.boxplot(data=comp_sqa, x="model", y="df1", hue="category", ax=axes[2])
+            axes[2].set_title("SQA Task: ΔF1 Distribution")
+            axes[2].set_ylabel("ΔF1 (noisy - clean)")
+            axes[2].tick_params(axis='x', rotation=45)
+            has_box_data = True
+        else:
+            axes[2].text(0.5, 0.5, "No SQA Data", ha="center", va="center")
+
+        if has_box_data:
+            plt.suptitle("E1 Robustness Distribution: Speech-like vs Non-speech Noise across ASR, KWS, and SQA", fontsize=14, y=0.98)
+            plt.tight_layout()
+            plt.savefig(PLOT_DIR / "e1_speech_vs_non_speech_box.png")
+            plt.close()
 
     # ── Task Generalisation (ASR vs KWS) ──
     kws_f = RESULTS / "e1_kws.csv"
@@ -714,15 +899,6 @@ def plot_all_results(smoke: bool) -> None:
             plt.savefig(PLOT_DIR / "fig2a_dwer_real_bar.png")
             plt.close()
 
-        if "bir" in df_e2.columns:
-            plt.figure(figsize=(10, 6))
-            sns.barplot(data=df_e2, x="model", y="bir")
-            plt.title("Fig 2b: E2 Background Injection Rate (BIR)")
-            plt.xticks(rotation=45)
-            plt.tight_layout()
-            plt.savefig(PLOT_DIR / "fig2b_bir.png")
-            plt.close()
-
     tir_f = RESULTS / "e2_tir.csv"
     if tir_f.exists() and tir_f.stat().st_size > 10:
         df_tir = pd.read_csv(tir_f)
@@ -749,16 +925,16 @@ def plot_all_results(smoke: bool) -> None:
     e3_f_fair = RESULTS / "e3_fairness.csv"
     if e3_f_fair.exists() and e3_f_fair.stat().st_size > 10:
         df_fair = pd.read_csv(e3_f_fair)
-        if "dwer_speech_like" in df_fair.columns and "dwer_stationary" in df_fair.columns:
-            # Melt for speech_like vs stationary comparison
-            df_fair_melt = df_fair.melt(id_vars=["model", "subgroup_type", "subgroup_value"], value_vars=["dwer_speech_like", "dwer_stationary"], var_name="BgType", value_name="ΔWER")
+        if "dwer_speech_like" in df_fair.columns and "dwer_non_speech" in df_fair.columns:
+            # Melt for speech_like vs non-speech comparison
+            df_fair_melt = df_fair.melt(id_vars=["model", "subgroup_type", "subgroup_value"], value_vars=["dwer_speech_like", "dwer_non_speech"], var_name="BgType", value_name="ΔWER")
             
             # 1. Accent-only plots
             df_acc = df_fair_melt[df_fair_melt["subgroup_type"] == "accent"]
             if not df_acc.empty:
                 plt.figure(figsize=(12, 6))
                 sns.barplot(data=df_acc, x="subgroup_value", y="ΔWER", hue="BgType")
-                plt.title("Fig 3b: E3 Ecological Accent ΔWER (Speech-like vs Stationary) - Bar")
+                plt.title("Fig 3b: E3 Ecological Accent ΔWER (Speech-like vs Non-speech) - Bar")
                 plt.xticks(rotation=45)
                 plt.tight_layout()
                 plt.savefig(PLOT_DIR / "fig3b_ecological_accent_bar.png")
@@ -777,7 +953,7 @@ def plot_all_results(smoke: bool) -> None:
             if not df_gen.empty:
                 plt.figure(figsize=(10, 6))
                 sns.barplot(data=df_gen, x="subgroup_value", y="ΔWER", hue="BgType")
-                plt.title("Fig 3c: E3 Ecological Gender ΔWER (Speech-like vs Stationary) - Bar")
+                plt.title("Fig 3c: E3 Ecological Gender ΔWER (Speech-like vs Non-speech) - Bar")
                 plt.xticks(rotation=45)
                 plt.tight_layout()
                 plt.savefig(PLOT_DIR / "fig3c_ecological_gender_bar.png")
@@ -787,12 +963,12 @@ def plot_all_results(smoke: bool) -> None:
     saa_fair_f = RESULTS / "e3_saa_fairness.csv"
     if saa_fair_f.exists() and saa_fair_f.stat().st_size > 10:
         df_saa_fair = pd.read_csv(saa_fair_f)
-        if "dwer_speech_like" in df_saa_fair.columns and "dwer_stationary" in df_saa_fair.columns:
-            df_saa_melt = df_saa_fair.melt(id_vars=["model", "accent"], value_vars=["dwer_speech_like", "dwer_stationary"], var_name="BgType", value_name="ΔWER")
+        if "dwer_speech_like" in df_saa_fair.columns and "dwer_non_speech" in df_saa_fair.columns:
+            df_saa_melt = df_saa_fair.melt(id_vars=["model", "accent"], value_vars=["dwer_speech_like", "dwer_non_speech"], var_name="BgType", value_name="ΔWER")
             
             plt.figure(figsize=(12, 6))
             sns.barplot(data=df_saa_melt, x="accent", y="ΔWER", hue="BgType")
-            plt.title("Fig 3d: E3 SAA Content-Controlled Accent ΔWER (Speech-like vs Stationary) - Bar")
+            plt.title("Fig 3d: E3 SAA Content-Controlled Accent ΔWER (Speech-like vs Non-speech) - Bar")
             plt.xticks(rotation=45)
             plt.tight_layout()
             plt.savefig(PLOT_DIR / "fig3d_saa_accent_bar.png")
@@ -933,17 +1109,6 @@ def build_summary(smoke: bool) -> None:
             entry["kws_acc_noisy"] = round(float(noisy_k["correct"].mean()), 4) if not noisy_k.empty else None
             entry["kws_far"] = round(float(kws["false_alarm"].mean()), 4) if not kws.empty else None
 
-        # E2 BIR (Background Injection Rate)
-        e2_f = RESULTS / "e2_semantic.csv"
-        if e2_f.exists() and e2_f.stat().st_size > 10:
-            try:
-                e2 = pd.read_csv(e2_f)
-                e2m = e2[e2["model"] == mid]
-                if not e2m.empty and "bir" in e2m.columns:
-                    entry["bir_mean"] = round(float(e2m["bir"].mean()), 4)
-            except Exception:
-                pass
-
         rows.append(entry)
 
     _save(pd.DataFrame(rows), "summary_table.csv")
@@ -963,6 +1128,7 @@ def main() -> None:
 
     score_e1_asr(smoke=args.smoke_test)
     score_e1_kws(smoke=args.smoke_test)
+    score_e1_sqa(smoke=args.smoke_test)
     _score_e1_profile(smoke=args.smoke_test)
     score_e2(smoke=args.smoke_test)
     score_e3(smoke=args.smoke_test)

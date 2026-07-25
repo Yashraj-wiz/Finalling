@@ -65,6 +65,28 @@ env/
 .ipynb_checkpoints/
 *.ipynb
 
+# ── Scratch & Temporary Files ──────────────────────────────────────────────────
+temp_*.jsonl
+*_check.jsonl
+*_fresh.jsonl
+*_full.jsonl
+full_sqa.jsonl
+live_*.jsonl
+qwen*.jsonl
+timestamp_output.txt
+check_vol.py
+check_modal_timestamp*.py
+fix.py
+
+# ── Local Inference Sync & Backup Folders ────────────────────────────────────
+inference_sync_*/
+inference_backup_*/
+kws_closed_run/
+results_backup_*/
+result_new_*/
+results_new_*/
+results_old/
+
 # ── Editor / OS ───────────────────────────────────────────────────────────────
 .DS_Store
 .idea/
@@ -72,3 +94,4 @@ env/
 *.swp
 *~
 requirements.txt
+

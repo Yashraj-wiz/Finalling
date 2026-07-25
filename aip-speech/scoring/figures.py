@@ -4,7 +4,7 @@ scoring/figures.py — Stage 8: produce all paper figures and appendix plots.
 
 Main paper figures (Figs 1–3):
   Fig 1: ΔWER vs speech_likeness and vs mod_2to8Hz (partial-dependence, 2 panels)
-  Fig 2: Real vs scrambled at 0 dB (paired bars, the semantic gap)
+  Fig 2: Semantic gap
   Fig 3: Disparate robustness: ΔWER by accent/gender (grouped bars)
 
 Appendix figures (A1–A5):
@@ -60,7 +60,9 @@ def _load_battery() -> pd.DataFrame:
     p = ROOT / "descriptors" / "battery.parquet"
     if not p.exists():
         return pd.DataFrame()
-    return pd.read_parquet(p)
+    df = pd.read_parquet(p)
+    if "category" in df.columns:
+    return df
 
 
 # ── Fig 1: Partial-dependence (descriptor law) ────────────────────────────────
@@ -115,7 +117,7 @@ def fig1_descriptor_law() -> None:
     log.info(f"[Fig1] → {out}")
 
 
-# ── Fig 2: Real vs scrambled (semantic gap) ───────────────────────────────────
+# ── Fig 2: Semantic gap ───────────────────────────────────────────────────────
 def fig2_semantic_gap() -> None:
     e2 = _load("e2_asr.csv")
     if e2.empty:
@@ -164,9 +166,9 @@ def fig3_disparate_robustness() -> None:
     if "dwer_speech_like" in sub_accent.columns:
         ax.bar(x,     sub_accent["dwer_speech_like"].fillna(0), w,
                label="Speech-like bg", color=PALETTE[2])
-    if "dwer_stationary" in sub_accent.columns:
-        ax.bar(x + w, sub_accent["dwer_stationary"].fillna(0), w,
-               label="Stationary bg", color=PALETTE[3])
+    if "dwer_non_speech" in sub_accent.columns:
+        ax.bar(x + w, sub_accent["dwer_non_speech"].fillna(0), w,
+               label="Non-speech bg", color=PALETTE[3])
 
     # Clean gap (baseline WER difference across accents — overlaid as scatter)
     if not asr.empty and "accent" in asr.columns and "wer" in asr.columns:

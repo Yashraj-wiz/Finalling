@@ -49,6 +49,14 @@ try:
 except (ImportError, AttributeError):
     pass
 
+try:
+    import transformers.utils.import_utils
+    import transformers.utils
+    transformers.utils.import_utils.check_torch_load_is_safe = lambda *args, **kwargs: None
+    transformers.utils.check_torch_load_is_safe = lambda *args, **kwargs: None
+except (ImportError, AttributeError):
+    pass
+
 
 import argparse
 import gc
@@ -161,6 +169,8 @@ PROMPTS = {
             "Output only the final keyword without explanations, notes, or any additional text.",
     "saa":  "Transcribe the speech in this audio clip exactly as spoken. "
             "Return only the transcription text.",
+    "sqa":  "Answer the question based only on the spoken passage. "
+            "Provide only the answer, nothing else."
 }
 
 
@@ -210,6 +220,8 @@ class Qwen25Omni3B(SpeechLLM):
             trust_remote_code=True,
             attn_implementation="sdpa",
         )
+        self.model.load_adapter(MODEL_ID, adapter_name="speech", adapter_kwargs={"subfolder": "speech-lora"})
+        self.model.set_adapter("speech")
         self.model.eval()
 
     def generate(self, wav: np.ndarray, task_prompt: str,
@@ -257,6 +269,8 @@ class Qwen25Omni7B(SpeechLLM):
             trust_remote_code=True,
             attn_implementation="sdpa",
         )
+        self.model.load_adapter(MODEL_ID, adapter_name="speech", adapter_kwargs={"subfolder": "speech-lora"})
+        self.model.set_adapter("speech")
         self.model.eval()
 
     def generate(self, wav: np.ndarray, task_prompt: str,
@@ -304,6 +318,8 @@ class Qwen2Audio7B(SpeechLLM):
             trust_remote_code=True,
             attn_implementation="sdpa",
         )
+        self.model.load_adapter(MODEL_ID, adapter_name="speech", adapter_kwargs={"subfolder": "speech-lora"})
+        self.model.set_adapter("speech")
         self.model.eval()
 
     def generate(self, wav: np.ndarray, task_prompt: str,
@@ -376,6 +392,19 @@ class Phi4Multimodal(SpeechLLM):
                 with open(encoder_path, "w") as f:
                     f.write(encoder_code)
 
+        modeling_path = os.path.join(model_dir, "modeling_phi4mm.py")
+        if os.path.exists(modeling_path):
+            with open(modeling_path, "r") as f:
+                mod_code = f.read()
+            if "_tied_weights_keys = [" in mod_code:
+                mod_code = mod_code.replace(
+                    "_tied_weights_keys = [",
+                    "# _tied_weights_keys patched out to avoid transformers dict crash\n    # _tied_weights_keys = ["
+                )
+                with open(modeling_path, "w") as f:
+                    f.write(mod_code)
+
+
         # Load using the MODEL ID so the trust_remote_code module loader 
         # correctly resolves the symlinked .py files in the cache volume.
         self.processor = AutoProcessor.from_pretrained(
@@ -388,6 +417,8 @@ class Phi4Multimodal(SpeechLLM):
             low_cpu_mem_usage=False,  # accelerate auto-enables this; phi4's custom
                                       # __init__ calls .item() which breaks meta tensors
         ).to(self.device)
+        self.model.load_adapter(MODEL_ID, adapter_name="speech", adapter_kwargs={"subfolder": "speech-lora"})
+        self.model.set_adapter("speech")
         self.model.eval()
 
     def generate(self, wav: np.ndarray, task_prompt: str,
@@ -428,6 +459,8 @@ class Gemma3nE4B(SpeechLLM):
             device_map="auto",
             trust_remote_code=True,
         )
+        self.model.load_adapter(MODEL_ID, adapter_name="speech", adapter_kwargs={"subfolder": "speech-lora"})
+        self.model.set_adapter("speech")
         self.model.eval()
 
     def generate(self, wav: np.ndarray, task_prompt: str,
@@ -523,6 +556,7 @@ ALL_TASKS  = [
     "asr", "kws", "saa",
     "asr_steer", "asr_steer_p1", "asr_steer_p2", "asr_steer_p3", "asr_steer_p4", "asr_steer_p5",
     "kws_steer", "kws_steer_p1", "kws_steer_p2", "kws_steer_p3", "kws_steer_p4", "kws_steer_p5",
+    "sqa"
 ]
 
 
@@ -675,6 +709,51 @@ def build_manifests(smoke: bool) -> None:
         pd.DataFrame(rows).to_csv(saa_path, index=False)
         log.info(f"[manifest] saa.csv: {len(rows)} rows → {saa_path}")
 
+    # SQA manifest
+    sqa_path = MANIFESTS / "sqa.csv"
+    if not sqa_path.exists():
+        items = jsonl_read(ROOT / "itembanks" / "sqa.jsonl")
+        if smoke:
+            items = items[:SMOKE_N]
+        rows = []
+        seed = 30000
+        for item in items:
+            # clean
+            rows.append({
+                "id": f"{item['id']}_clean",
+                "speech_id": item["id"],
+                "background_id": "clean",
+                "snr_db": 99,
+                "condition": "clean",
+                "seed": seed,
+                "speech_path": item["wav"],
+                "bg_path": "",
+                "question_path": item["question_wav"],
+                "question": item.get("question", ""),
+                "answer": item.get("answer", ""),
+                "passage_text": item.get("passage_text", ""),
+            })
+            seed += 1
+            for bg in battery:
+                for snr in ([0] if smoke else [10, 5, 0]):
+                    rows.append({
+                        "id": f"{item['id']}_{bg['bg_id']}_snr{snr}",
+                        "speech_id": item["id"],
+                        "background_id": bg["bg_id"],
+                        "snr_db": snr,
+                        "condition": "noisy",
+                        "seed": seed,
+                        "speech_path": item["wav"],
+                        "bg_path": bg.get("wav", ""),
+                        "question_path": item["question_wav"],
+                        "question": item.get("question", ""),
+                        "answer": item.get("answer", ""),
+                        "passage_text": item.get("passage_text", ""),
+                    })
+                    seed += 1
+        pd.DataFrame(rows).to_csv(sqa_path, index=False)
+        log.info(f"[manifest] sqa.csv: {len(rows)} rows → {sqa_path}")
+
 
 
 def _load_battery() -> list[dict]:
@@ -753,11 +832,24 @@ def run_inference_with_model(model: SpeechLLM, model_id: str, task: str, smoke: 
                 else:
                     bg = None
 
-            wav = mix(sp, bg, float(row["snr_db"]), int(row["seed"]))
+            if task == "sqa":
+                q_path_str = str(row.get("question_path", "")).replace("\\", "/")
+                if not q_path_str:
+                    log.error(f"[SQA] Missing question_path for {row['id']}")
+                    continue
+                q_sp = load_audio(ROOT / q_path_str)
+                passage_mixed = mix(sp, bg, float(row["snr_db"]), int(row["seed"]))
+                question_mixed = mix(q_sp, bg, float(row["snr_db"]), int(row["seed"]) + 1)
+                silence_gap = np.zeros(int(0.5 * SR), dtype=np.float32)
+                wav = np.concatenate([passage_mixed, silence_gap, question_mixed])
+            else:
+                wav = mix(sp, bg, float(row["snr_db"]), int(row["seed"]))
+                
             diag_row = dict(row)
             diag_row["id"] = row["id"]
             diag_row["condition"] = row.get("condition", "noisy")
-            diagnostics(diag_row, wav, sp)
+            if task != "sqa":
+                diagnostics(diag_row, wav, sp)
 
             raw = model.generate(wav, prompt)
             log.info(f"[save] {model_id} / {task} ({i}/{total_remaining}) - {row['id']} -> '{raw}' saved to {out_path.relative_to(ROOT)}")
@@ -809,7 +901,13 @@ def main() -> None:
         # Filter tasks that actually have remaining work for this model
         tasks_to_run = []
         for task in tasks:
-            base_task = "kws" if task.startswith("kws") else "asr"
+            if task == "sqa":
+                base_task = "sqa"
+            elif task == "saa":
+                base_task = "saa"
+            else:
+                base_task = "kws" if task.startswith("kws") else "asr"
+                
             manifest_file = MANIFESTS / f"{base_task}.csv"
             if manifest_file.exists():
                 import pandas as pd
@@ -819,6 +917,12 @@ def main() -> None:
                 out_path = INFER_DIR / model_id / f"{task}.jsonl"
                 done = jsonl_ids(out_path)
                 remaining = manifest[~manifest["id"].isin(done)]
+                
+                # Temporary constraint: skip kimi for sqa
+                if task == "sqa" and model_id == "kimi_audio_7b":
+                    log.info(f"Skipping {task} for {model_id} as requested.")
+                    remaining = pd.DataFrame() # effectively skip
+
                 if not remaining.empty:
                     tasks_to_run.append(task)
 

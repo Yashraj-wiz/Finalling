@@ -4,13 +4,14 @@ import os
 
 # Define the environment with PyTorch and required dependencies from requirements.txt
 image = (
-    modal.Image.debian_slim(python_version="3.10")
+    modal.Image.from_registry("nvidia/cuda:12.4.1-devel-ubuntu22.04", add_python="3.10")
+    .env({"FORCE_BUILD": "phi4-fix-v3"})
+    .apt_install("git", "build-essential", "ffmpeg")
+    .pip_install("packaging", "ninja", "wheel", "setuptools")
+    .pip_install("torch==2.5.1", "torchaudio==2.5.1", "torchvision==0.20.1")
     .pip_install(
-        "torch",
-        "torchaudio",
-        "torchvision",
         "timm",
-        "transformers>=4.49.0",
+        "transformers==4.48.2",
         "accelerate",
         "bitsandbytes",
         "soundfile",
@@ -30,9 +31,31 @@ image = (
         "seaborn",
         "tqdm",
         "requests",
-        "peft",
+        "peft==0.11.1",
+        "loguru",
+        "omegaconf",
+        "conformer",
+        "diffusers",
+        "torchdyn",
+        "decord",
+        "blobfile",
+        "deepspeed",
+        "easydict",
+        "fire",
+        "hyperpyyaml",
+        "immutabledict",
+        "sacrebleu",
+        "jsonlines",
+        "validators",
+        "sty",
+        "colorama",
+        "ujson",
+        "cairosvg",
+        "wget",
+        "gdown",
+        "sentencepiece"
     )
-    .apt_install("ffmpeg")
+    .run_commands("CC=gcc CXX=g++ pip install flash-attn --no-build-isolation")
 )
 
 # Define the local mount path
@@ -83,6 +106,7 @@ secrets = [hf_secret] if hf_secret else []
 )
 def run_inference(smoke_test: bool = False, model: str = "all", task: str = "all"):
     import sys
+    import time
     
     # Change working directory to the workspace
     os.chdir("/workspace")
@@ -95,18 +119,63 @@ def run_inference(smoke_test: bool = False, model: str = "all", task: str = "all
     print(f"Running command: {' '.join(cmd)}")
     
     # Execute the underlying script and stream output
-    result = subprocess.run(cmd, check=False)
+    proc = subprocess.Popen(cmd)
     
-    # Commit changes on the inference volume to ensure they are available for syncing
+    # Periodically commit changes on the inference volume to ensure they are available for syncing
+    while True:
+        ret = proc.poll()
+        if ret is not None:
+            break
+        try:
+            inference_volume.commit()
+        except Exception as e:
+            print(f"Volume commit failed: {e}")
+        time.sleep(300)  # commit every 5 minutes
+    
+    # Final commit
     inference_volume.commit()
     
-    if result.returncode != 0:
-        print(f"Error: inference script failed with exit code {result.returncode}", file=sys.stderr)
-        raise subprocess.CalledProcessError(result.returncode, cmd)
+    if proc.returncode != 0:
+        print(f"Error: inference script failed with exit code {proc.returncode}", file=sys.stderr)
+        raise subprocess.CalledProcessError(proc.returncode, cmd)
     else:
         print("Inference completed successfully!")
 
 @app.local_entrypoint()
 def main(smoke_test: bool = False, model: str = "all", task: str = "all"):
+    import time
+    import threading
+    import subprocess
+    
+    timestamp = int(time.time())
+    # Create a unique folder for this run's sync to avoid touching or overwriting other models' local data
+    sync_dir = f"inference_sync_{model}_{timestamp}"
     print(f"Starting Modal run on L4 GPU. smoke_test={smoke_test}, model={model}, task={task}")
-    run_inference.remote(smoke_test, model, task)
+    print(f"Local sync directory for this run: {sync_dir}/")
+    
+    def sync_volume():
+        print(f"Starting periodic volume sync to local ./{sync_dir} directory (every 5 mins)...")
+        os.makedirs(sync_dir, exist_ok=True)
+        # We only download the directory of the model being run to avoid pulling everything
+        remote_path = f"/{model}" if model != "all" else "/"
+        while True:
+            time.sleep(300)
+            print(f"Syncing {remote_path} from Modal volume to local {sync_dir}...")
+            try:
+                subprocess.run(["modal", "volume", "get", "aip-inference-out", remote_path, f"{sync_dir}/", "--force"], check=False)
+                print("Sync complete.")
+            except Exception as e:
+                print(f"Sync failed: {e}")
+                
+    # Start the sync thread as a daemon so it exits when main exits
+    sync_thread = threading.Thread(target=sync_volume, daemon=True)
+    sync_thread.start()
+    
+    # Run the modal function (this will block until it finishes)
+    try:
+        run_inference.remote(smoke_test, model, task)
+    finally:
+        # One final sync after it finishes or errors
+        print("Run finished or interrupted. Final sync...")
+        remote_path = f"/{model}" if model != "all" else "/"
+        subprocess.run(["modal", "volume", "get", "aip-inference-out", remote_path, f"{sync_dir}/", "--force"], check=False)

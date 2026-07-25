@@ -40,7 +40,9 @@ def _load_battery() -> pd.DataFrame:
     p = ROOT / "descriptors" / "battery.parquet"
     if not p.exists():
         return pd.DataFrame()
-    return pd.read_parquet(p)
+    df = pd.read_parquet(p)
+    if "category" in df.columns:
+    return df
 
 
 # ── C-PROFILE: mixed-effects regression ──────────────────────────────────────

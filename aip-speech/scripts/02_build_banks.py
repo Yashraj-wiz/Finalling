@@ -61,6 +61,20 @@ def build_asr_bank(prog: ProgressLog, n: int) -> None:
     done_ids = jsonl_ids(ASR_BANK)
     items: list[dict] = []
 
+    # Load speaker metadata for gender
+    speakers_file = DATA / "speech_asr" / "LibriSpeech" / "SPEAKERS.TXT"
+    speaker_gender = {}
+    if speakers_file.exists():
+        with open(speakers_file) as f:
+            for line in f:
+                if line.startswith(";"):
+                    continue
+                parts = [p.strip() for p in line.split("|")]
+                if len(parts) >= 2:
+                    spk_id = parts[0]
+                    gender = "female" if parts[1] == "F" else "male" if parts[1] == "M" else "unknown"
+                    speaker_gender[spk_id] = gender
+
     # Collect from test-clean and test-other
     for split in ["test-clean", "test-other"]:
         trans_files = sorted(
@@ -76,13 +90,14 @@ def build_asr_bank(prog: ProgressLog, n: int) -> None:
                     wav = tf.parent / f"{utt_id}.flac"
                     if not wav.exists():
                         continue
+                    spk_id = utt_id.split("-")[0]
                     items.append({
                         "id": utt_id,
                         "wav": str(wav.relative_to(ROOT)),
                         "transcript": transcript,
                         "source": f"librispeech_{split}",
                         "accent": "american_english",
-                        "gender": "unknown",
+                        "gender": speaker_gender.get(spk_id, "unknown"),
                         "age": "unknown",
                     })
 
@@ -281,6 +296,112 @@ def build_saa_bank(prog: ProgressLog, n: int) -> None:
     log.info(f"[done] SAA bank: {len(jsonl_ids(SAA_BANK))} items.")
 
 
+# ── Spoken SQuAD → sqa.jsonl ──────────────────────────────────────────────────
+def build_sqa_bank(prog: ProgressLog, n: int) -> None:
+    key = "sqa_bank"
+    if prog.done(key):
+        log.info("[skip] SQA bank already built.")
+        return
+
+    SQA_BANK = ROOT / "itembanks" / "sqa.jsonl"
+    done_ids = jsonl_ids(SQA_BANK)
+    
+    passage_dir = DATA / "speech_sqa_passages"
+    question_dir = DATA / "speech_sqa_questions"
+    passage_dir.mkdir(parents=True, exist_ok=True)
+    question_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        from datasets import load_dataset
+        import edge_tts
+        import asyncio
+        import soundfile as sf
+        import io
+    except ImportError as e:
+        log.warning(f"[SQA] Missing dependencies ({e}). Run: pip install datasets edge-tts soundfile. Skipping.")
+        return
+
+    log.info("[SQA] Loading AudioLLMs/spoken_squad_test...")
+    import datasets
+    
+    async def synthesize(text, out_path):
+        communicate = edge_tts.Communicate(text, "en-US-AriaNeural")
+        await communicate.save(str(out_path))
+
+    added = 0
+    try:
+        ds = load_dataset("AudioLLMs/spoken_squad_test", split="test", streaming=True)
+        ds = ds.cast_column("context", datasets.Audio(decode=False))
+        log.info(f"[SQA] Fetching first {n} items from streaming dataset...")
+        items = list(ds.take(n))
+    except Exception as e:
+        log.error(f"[SQA] Failed to load/stream dataset: {e}")
+        raise e
+
+    for idx in range(n):
+        uid = f"sqa_{idx}"
+        if uid in done_ids:
+            added += 1
+            continue
+            
+        try:
+            item = items[idx]
+        except IndexError as e:
+            log.error(f"[SQA] Index {idx} out of range in streamed items (total fetched: {len(items)}): {e}")
+            raise e
+            
+        passage_text = "" # Spoken SQuAD HF test split doesn't contain passage transcript text
+        question_text = item.get("instruction", "")
+        answer_text = item.get("answer", "")
+        audio_data = item.get("context", {}) or {}
+            
+        passage_wav = passage_dir / f"{uid}.wav"
+        question_wav = question_dir / f"{uid}.wav"
+        
+        # Save or synthesize passage audio
+        if not passage_wav.exists():
+            if "array" in audio_data and "sampling_rate" in audio_data:
+                sf.write(str(passage_wav), audio_data["array"], audio_data["sampling_rate"])
+            elif "bytes" in audio_data and audio_data["bytes"]:
+                with open(passage_wav, "wb") as f:
+                    f.write(audio_data["bytes"])
+            elif "path" in audio_data and audio_data["path"]:
+                import shutil
+                shutil.copy(audio_data["path"], passage_wav)
+            else:
+                # Synthesize passage since no audio is provided
+                try:
+                    asyncio.run(synthesize(passage_text, passage_wav))
+                except Exception as e:
+                    log.warning(f"[SQA] Failed to synthesize fallback passage for {uid}: {e}")
+                    continue
+                
+        # Synthesize question audio
+        if not question_wav.exists():
+            try:
+                asyncio.run(synthesize(question_text, question_wav))
+            except Exception as e:
+                log.warning(f"[SQA] Failed to synthesize question for {uid}: {e}")
+                continue
+
+        jsonl_append(SQA_BANK, {
+            "id": uid,
+            "wav": str(passage_wav.relative_to(ROOT)),
+            "question_wav": str(question_wav.relative_to(ROOT)),
+            "question": question_text,
+            "answer": answer_text,
+            "passage_text": passage_text,
+            "source": "spoken_squad",
+            "accent": "american_english",
+            "gender": "unknown",
+        })
+        done_ids.add(uid)
+        added += 1
+
+    prog.mark(key)
+    log.info(f"[done] SQA bank: {len(jsonl_ids(SQA_BANK))} items.")
+
+
 # ── main ─────────────────────────────────────────────────────────────────────
 def main() -> None:
     ap = argparse.ArgumentParser(description="Stage 2 — Build foreground item banks")
@@ -292,6 +413,7 @@ def main() -> None:
     asr_n = SMOKE_N if args.smoke_test else ASR_N
     kws_n = SMOKE_N if args.smoke_test else KWS_N
     saa_n = SMOKE_N if args.smoke_test else SAA_N
+    sqa_n = SMOKE_N if args.smoke_test else ASR_N # SQA gets ~100 to match ASR
 
     if args.smoke_test:
         log.info("=== SMOKE TEST MODE ===")
@@ -299,12 +421,13 @@ def main() -> None:
     prog = ProgressLog(PROGRESS)
     # Reset smoke keys so full run can redo them properly
     if args.smoke_test:
-        for k in ["asr_bank", "kws_bank", "saa_bank"]:
+        for k in ["asr_bank", "kws_bank", "saa_bank", "sqa_bank"]:
             prog._data.pop(k, None)
 
     build_asr_bank(prog, asr_n)
     build_kws_bank(prog, kws_n)
     build_saa_bank(prog, saa_n)
+    build_sqa_bank(prog, sqa_n)
 
     log.info("=== Stage 2 complete. ===")
 
