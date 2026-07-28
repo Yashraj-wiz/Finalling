@@ -119,7 +119,6 @@ Five core models spanning the encoder-coupling spectrum, all fitting 16 GB in **
 | **Qwen2-Audio-7B** | 4-bit (~5–6 GB) | end-to-end (Whisper-init) | acoustically-sensitive exemplar |
 | **Phi-4-multimodal** | ~5.6B, 4-bit/8-bit | LoRA adapter | strong LLM-decoder ASR, intermediate coupling |
 | **Gemma 3n-E4B** | effective ~4B, edge-optimized | USM + Gemma | user-requested; fits easily; ≤30 s clips |
-| **Kimi-Audio-7B** | 4-bit | end-to-end | independent pipeline (force task; it defaults to ASR) |
 | *(swap/stretch)* MiniCPM-o 2.6 / Step-Audio 2 / Audio Flamingo 3 | 4-bit | — | extended set, reduced grid if ahead |
 | *(optional API ~$10)* GPT-4o-Audio / Gemini-Flash | — | closed | reference points |
 
@@ -220,7 +219,7 @@ If injection is the most striking result, promote Fig A2 into the main paper and
 | "On-the-fly = opaque" | Persisted inspection sample + deterministic regeneration + per-stimulus diagnostics CSV (§3.1). |
 | Not novel vs RSA-Bench | Lead with descriptor law + fairness; cite/differentiate (Appendix A). |
 | Descriptor collinearity | Report VIF; dissociate with NOISEX-babble vs MUSAN-non-speech; prefer partial-dependence to raw coefficients. |
-| Model quirks (Kimi ASR-default; speech-out) | Robust adapters; defensive parsing; Whisper-transcribe speech-out; log parse failures. |
+| Model quirks (speech-out) | Robust adapters; defensive parsing; Whisper-transcribe speech-out; log parse failures. |
 
 ---
 

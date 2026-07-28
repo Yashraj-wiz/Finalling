@@ -58,7 +58,6 @@ Core stays at **five models** — capacity for more is now budget-bound, not VRA
 | **Qwen2.5-Omni-7B** **[new — was excluded at 16 GB]** | 8-bit (Thinker only) | end-to-end | within-family capacity contrast vs the 3B |
 | **Qwen2-Audio-7B** **[changed]** | **fp16** (was 4-bit) | end-to-end (Whisper-init) | acoustically-sensitive exemplar, full precision |
 | **Phi-4-multimodal** **[changed]** | **8-bit or fp16** (was 4-bit/8-bit) | LoRA adapter | strong LLM-decoder ASR, intermediate coupling |
-| **Kimi-Audio-7B** **[changed]** | **8-bit** (was 4-bit) | end-to-end | independent pipeline (force task; defaults to ASR) |
 | Gemma 3n-E4B | fp16, ≤30 s clips | USM + Gemma | edge anchor (keep or swap for a current-SOTA anchor below) |
 
 **Optional roster strengtheners (add only if Day-6 gate is green and time allows):**

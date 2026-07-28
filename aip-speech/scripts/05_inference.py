@@ -486,62 +486,6 @@ class Gemma3nE4B(SpeechLLM):
         torch.cuda.empty_cache()
 
 
-# ── Kimi-Audio-7B (4-bit) ────────────────────────────────────────────────────
-class KimiAudio7B(SpeechLLM):
-    model_id = "kimi_audio_7b"
-
-    def __init__(self):
-        import torch
-        import sys
-        
-        kimi_path = ROOT / "Kimi-Audio"
-        if str(kimi_path) not in sys.path:
-            sys.path.append(str(kimi_path))
-            
-        from kimia_infer.api.kimia import KimiAudio
-        
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model = KimiAudio(
-            model_path="moonshotai/Kimi-Audio-7B-Instruct",
-            load_detokenizer=True,
-        )
-
-    def generate(self, wav: np.ndarray, task_prompt: str,
-                 system_prompt: str | None = None, max_new_tokens: int = 64) -> str:
-        import soundfile as sf
-        import tempfile
-        import os
-        
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-            temp_wav = f.name
-            
-        try:
-            wav = _clip_audio(wav)
-            sf.write(temp_wav, wav, SR)
-            
-            messages = [
-                {"role": "user", "message_type": "audio", "content": temp_wav},
-                {"role": "user", "message_type": "text", "content": task_prompt}
-            ]
-            
-            sampling_params = {
-                "text_temperature": 0.0,
-                "text_top_k": 1,
-            }
-            
-            _, text = self.model.generate(messages, **sampling_params, output_type="text")
-            return str(text).strip()
-        finally:
-            if os.path.exists(temp_wav):
-                os.remove(temp_wav)
-
-    def unload(self):
-        import torch
-        del self.model
-        gc.collect()
-        torch.cuda.empty_cache()
-
-
 # Registry
 MODEL_CLASSES: dict[str, type[SpeechLLM]] = {
     "qwen25_omni_3b":  Qwen25Omni3B,
@@ -549,7 +493,6 @@ MODEL_CLASSES: dict[str, type[SpeechLLM]] = {
     "qwen2_audio_7b":  Qwen2Audio7B,
     "phi4_multimodal": Phi4Multimodal,
     "gemma3n_e4b":     Gemma3nE4B,
-    "kimi_audio_7b":   KimiAudio7B,
 }
 ALL_MODELS = list(MODEL_CLASSES.keys())
 ALL_TASKS  = [
@@ -918,11 +861,6 @@ def main() -> None:
                 done = jsonl_ids(out_path)
                 remaining = manifest[~manifest["id"].isin(done)]
                 
-                # Temporary constraint: skip kimi for sqa
-                if task == "sqa" and model_id == "kimi_audio_7b":
-                    log.info(f"Skipping {task} for {model_id} as requested.")
-                    remaining = pd.DataFrame() # effectively skip
-
                 if not remaining.empty:
                     tasks_to_run.append(task)
 

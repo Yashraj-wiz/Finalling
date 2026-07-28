@@ -131,7 +131,7 @@ Run on the persisted inspection sample + a random regenerated subset:
 class SpeechLLM:
     def generate(self, wav_np, task_prompt, system_prompt=None, max_new_tokens=64) -> str: ...
 ```
-Adapters: Qwen2.5-Omni-3B (Thinker only), Qwen2-Audio-7B (4-bit), Phi-4-multimodal (4-bit), Gemma 3n-E4B, Kimi-Audio-7B (4-bit). **One model resident at a time**; `del model; torch.cuda.empty_cache()` between models. Understanding-only configs; **VRAM dry-run per model** before the full sweep. Batch 1–2 for 7B; larger for KWS.
+Adapters: Qwen2.5-Omni-3B (Thinker only), Qwen2-Audio-7B (4-bit), Phi-4-multimodal (4-bit), Gemma 3n-E4B. **One model resident at a time**; `del model; torch.cuda.empty_cache()` between models. Understanding-only configs; **VRAM dry-run per model** before the full sweep. Batch 1–2 for 7B; larger for KWS.
 
 ```python
 for row in manifest:                                   # metadata only
@@ -180,5 +180,5 @@ for row in manifest:                                   # metadata only
 - **Greedy decoding** for core metrics → determinism check suffices; significance via paired permutation tests.
 - **All backgrounds named + public;** ship source IDs + seeds; no synthesized babble.
 - **Bake demographics into the ASR bank** so E3 ecological is a post-hoc cut, not a second grid.
-- **Watch model quirks:** Kimi defaults to ASR (force the task); speech-out models need Whisper transcription; quantized models need a sanity item first.
+- **Watch model quirks:** speech-out models need Whisper transcription; quantized models need a sanity item first.
 - **Pre-register Day 2;** the profile/disparity story needs frozen thresholds.

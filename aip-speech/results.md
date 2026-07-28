@@ -25,7 +25,6 @@
 | Qwen2-Audio-7B | — | — | — | — | — |
 | Phi-4-multimodal | — | — | — | — | — |
 | Gemma-3n-E4B | — | — | — | — | — |
-| Kimi-Audio-7B | — | — | — | — | — |
 
 ### T1.2 KWS (Google Speech Commands v2)
 
@@ -35,7 +34,6 @@
 | Qwen2-Audio-7B | — | — | — | — |
 | Phi-4-multimodal | — | — | — | — |
 | Gemma-3n-E4B | — | — | — | — |
-| Kimi-Audio-7B | — | — | — | — |
 
 ### T1.3 SQA (Spoken SQuAD)
 
@@ -46,7 +44,6 @@
 | Qwen2.5-Omni-7B | 0.100 | 0.163 | 1.000 | 0.078 | 0.132 | 1.000 |
 | Phi-4-multimodal | failed | failed | failed | failed | failed | failed |
 | Gemma-3n-E4B | failed | failed | failed | failed | failed | failed |
-| Kimi-Audio-7B | skipped | skipped | skipped | skipped | skipped | skipped |
 
 ---
 

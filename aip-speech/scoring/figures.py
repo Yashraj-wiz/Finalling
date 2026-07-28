@@ -62,6 +62,7 @@ def _load_battery() -> pd.DataFrame:
         return pd.DataFrame()
     df = pd.read_parquet(p)
     if "category" in df.columns:
+        pass
     return df
 
 
@@ -325,7 +326,6 @@ def figa4_battery_map() -> None:
 COUPLING_TIER = {
     "qwen25_omni_3b":  "end-to-end",
     "qwen2_audio_7b":  "end-to-end",
-    "kimi_audio_7b":   "end-to-end",
     "phi4_multimodal": "LoRA adapter",
     "gemma3n_e4b":     "USM + LLM",
 }
