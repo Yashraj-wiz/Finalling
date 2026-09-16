@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AIP-Speech</title>
+<meta name="description" content="AIP-Speech: Auditing Speech LLM Robustness to Background Interference — an inference-only benchmark relating interpretable acoustic descriptors to Speech LLM degradation under real-world background interference.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,500;0,8..60,600;0,8..60,700;1,8..60,400;1,8..60,500&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="masthead" id="top">
+  <div class="wrap">
+    <div class="stamp" aria-hidden="true">
+      <span class="stamp__id">TR&nbsp;·&nbsp;AIP&#8209;SPEECH</span>
+      <span class="stamp__ring"></span>
+    </div>
+
+    <p class="kicker">IvLabs · Visvesvaraya National Institute of Technology (VNIT), India</p>
+    <h1 class="title">AIP&#8209;Speech<span class="title__sub">Auditing Speech LLM Robustness to Background Interference</span></h1>
+
+    <p class="byline">
+      Aiden&nbsp;Dsouza · Shreyansh&nbsp;Mishra · Yashraj&nbsp;Suneja · Rohan&nbsp;Swain · Samyak&nbsp;Borkar · Arjun&nbsp;Jaishankar · Tanmay&nbsp;Urade
+    </p>
+
+    <nav class="actions" aria-label="Paper resources">
+      <a href="assets/aip-speech-paper.pdf">Paper&nbsp;PDF</a>
+      <span class="actions__div" aria-hidden="true">/</span>
+      <a href="https://github.com/IvLabs/AIP-Speech">GitHub</a>
+      <span class="actions__div" aria-hidden="true">/</span>
+      <a href="#cite">BibTeX</a>
+      <span class="actions__div" aria-hidden="true">/</span>
+      <a href="mailto:aiden.dsouza@ivlabs.in">Correspondence</a>
+    </nav>
+
+    <div class="abstract" id="abstract">
+      <p class="abstract__label">Abstract</p>
+      <p>Speech Large Language Models (Speech LLMs) are increasingly deployed in real-world acoustic environments, yet it remains unclear which measurable properties of background sounds best explain performance degradation. We present AIP-Speech, an inference-only benchmark that evaluates Speech LLM robustness under controlled mixtures of real-world background recordings. Rather than comparing robustness across background categories alone, we characterize each recording using interpretable acoustic descriptors and examine their associations with degradation. Across five open Speech LLMs, we find that simple spectral descriptors&mdash;including Zero Crossing Rate, Spectral Centroid, and Spectral Rolloff&mdash;consistently exhibit strong associations with degradation. We further quantify robustness disparities across accents and evaluate whether inference-time prompting improves resilience under adverse acoustic conditions. AIP-Speech provides a reproducible benchmark and descriptor-annotated background corpus for analyzing Speech LLM robustness.</p>
+    </div>
+
+    <p class="finding"><span class="finding__mark">Finding&mdash;</span>Simple spectral descriptors&mdash;Zero&nbsp;Crossing&nbsp;Rate, Spectral&nbsp;Centroid, Spectral&nbsp;Rolloff&mdash;consistently predict how much a background recording degrades Speech&nbsp;LLM performance, across five models and two tasks.</p>
+  </div>
+</header>
+
+<main id="main">
+
+  <!-- 01 BENCHMARK -->
+  <section class="sec" id="benchmark" aria-labelledby="h-benchmark">
+    <div class="wrap">
+      <p class="sec__no">01</p>
+      <h2 class="sec__title" id="h-benchmark">Benchmark</h2>
+
+      <div class="sec__body">
+        <div class="prose">
+          <p>How Speech LLMs behave under background interference remains poorly understood. Existing benchmarks report aggregate performance under a limited set of acoustic conditions, providing little insight into <em>which</em> measurable acoustic properties are associated with degradation&mdash;or whether interference affects demographic groups uniformly.</p>
+          <p>AIP&#8209;Speech isolates the effect of background interference by holding spoken content fixed while systematically varying the background audio. A clean utterance is mixed with a controlled background recording at multiple signal&#8209;to&#8209;noise ratios (SNRs); paired clean&ndash;noisy predictions from five open Speech LLMs are then related to interpretable acoustic descriptors, demographic subgroup, and inference&#8209;time prompting.</p>
+          <ol class="contrib">
+            <li>A reproducible benchmark and evaluation framework for auditing Speech LLMs under controlled, real&#8209;world background interference.</li>
+            <li>Descriptor&#8209;level analysis relating interpretable acoustic descriptors to degradation across ASR and keyword spotting.</li>
+            <li>An evaluation of robustness disparities across demographic (accent) groups, and of inference&#8209;time prompting under acoustic interference.</li>
+          </ol>
+        </div>
+
+        <figure class="pipeline" aria-label="AIP-Speech evaluation pipeline">
+          <div id="pipeline-diagram" role="img" aria-label="Clean speech from LibriSpeech, Common Voice, and Speech Commands v2, and background recordings from ESC-50, MS-SNSD, NOISEX-92, and MUSAN, are mixed at SNRs of 10, 5, and 0 dB. Five Speech LLMs — Qwen2-Audio, Qwen2.5-Omni 3B and 7B, Phi-4-Multimodal, and Gemma 3n — are evaluated on the paired clean and noisy audio, scored as Δt = St(noisy) − St(clean); ASR maps to WER, KWS to accuracy. Acoustic descriptors are extracted independently from the background recordings and feed only the analysis stage: descriptor analysis, background ranking, fairness, and prompt steering."></div>
+          <figcaption><span class="mono-cap">FIG. 1</span> — clean speech + controlled background mixtures, evaluated across five Speech LLMs, paired for descriptor, fairness, and prompt&#8209;steering analysis.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- 02 DESCRIPTORS -->
+  <section class="sec" id="descriptors" aria-labelledby="h-descriptors">
+    <div class="wrap">
+      <p class="sec__no">02</p>
+      <h2 class="sec__title" id="h-descriptors">Descriptors</h2>
+
+      <div class="prose">
+        <p>Each of the 20 background recordings is characterized by standard acoustic descriptors computed directly from its waveform (Zero Crossing Rate, spectral centroid/rolloff/bandwidth/flux/flatness/contrast, RMS energy variance, and Silero VAD speech fraction). Degradation&mdash;the drop in task performance between clean and noisy audio&mdash;is then related to each descriptor via Spearman rank correlation.</p>
+      </div>
+
+      <div class="viz-root" id="corr-viz" data-palette="#2a78d6,#eb6834,#1baf7a,#eda100,#e87ba4">
+        <div class="viz-controls">
+          <div class="seg" id="task-toggle" role="tablist" aria-label="Evaluation task">
+            <button role="tab" aria-selected="true" data-task="ASR">ASR <span class="seg__hint">(WER)</span></button>
+            <button role="tab" aria-selected="false" data-task="KWS">KWS <span class="seg__hint">(accuracy)</span></button>
+          </div>
+          <div class="seg" id="model-toggle" role="tablist" aria-label="Model view">
+            <button role="tab" aria-selected="true" data-model="pooled">Pooled (all 5)</button>
+            <button role="tab" aria-selected="false" data-model="permodel">Per&#8209;model</button>
+          </div>
+        </div>
+        <div id="corr-chart" class="chart" role="img" aria-label="Spearman rank correlation between each acoustic descriptor and task degradation"></div>
+        <p class="viz-note">Correlations from Table 2. Zero Crossing Rate shows the strongest association with degradation for both tasks (r<sub>s</sub> = 0.645 ASR, 0.723 KWS, pooled across models). Asterisked Qwen2&#8209;Audio KWS values were measured under the unsteered baseline protocol.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 03 BACKGROUND CORPUS -->
+  <section class="sec" id="corpus" aria-labelledby="h-corpus">
+    <div class="wrap">
+      <p class="sec__no">03</p>
+      <h2 class="sec__title" id="h-corpus">Background corpus</h2>
+
+      <div class="prose">
+        <p>AIP&#8209;Speech uses a fixed set of 20 publicly available real&#8209;world background recordings drawn from ESC&#8209;50, MS&#8209;SNSD, NOISEX&#8209;92, and MUSAN, each annotated with the descriptors above. Click a column to sort; the table underlies the descriptor&#8209;level correlations in §02.</p>
+      </div>
+
+      <div class="table-wrap">
+        <table id="corpus-table" class="data-table">
+          <caption><span class="mono-cap">TABLE 1 + 3</span> — background recordings and per&#8209;recording descriptor values</caption>
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- 04 FAIRNESS -->
+  <section class="sec" id="fairness" aria-labelledby="h-fairness">
+    <div class="wrap">
+      <p class="sec__no">04</p>
+      <h2 class="sec__title" id="h-fairness">Fairness</h2>
+
+      <div class="prose">
+        <p>Background interference does not affect every accent subgroup equally. Mean ΔWER (noisy&nbsp;&minus;&nbsp;clean, relative to each subgroup's own clean baseline) is reported across ten accent groups from Mozilla Common Voice, for all five evaluated models. Some models degrade fairly uniformly; others show pronounced sensitivity to specific accents.</p>
+      </div>
+
+      <div class="viz-root" id="fair-viz" data-palette="#2a78d6,#eb6834,#1baf7a,#eda100,#e87ba4">
+        <div class="viz-controls">
+          <div class="legend" id="fair-legend" aria-label="Model legend"></div>
+        </div>
+        <div id="fair-chart" class="chart chart--tall" role="img" aria-label="Mean ASR performance degradation across accent subgroups, by model"></div>
+        <p class="viz-note">Table 4. Positive values indicate greater degradation than the subgroup's clean baseline; negative values indicate the model performed better than its clean baseline on that subgroup's noisy audio.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 05 PROMPT STEERING -->
+  <section class="sec" id="steering" aria-labelledby="h-steering">
+    <div class="wrap">
+      <p class="sec__no">05</p>
+      <h2 class="sec__title" id="h-steering">Prompt steering</h2>
+
+      <div class="prose">
+        <p>Each model is evaluated under a baseline instruction and under a steering prompt that asks it to attend only to the intended foreground speaker. Effectiveness is summarized as the Residual Effect Ratio, RER&nbsp;=&nbsp;Δ<sub>prompt</sub>&nbsp;/&nbsp;Δ<sub>baseline</sub>: values below the dashed line at 1.0 indicate the steering prompt <em>reduced</em> degradation.</p>
+      </div>
+
+      <div class="viz-root" id="rer-viz" data-palette="#2a78d6,#eb6834,#1baf7a,#eda100,#e87ba4">
+        <div id="rer-chart" class="chart" role="img" aria-label="Residual Effect Ratio after prompt steering, by model and task"></div>
+        <p class="viz-note">Table 5. Prompt steering helps most models on ASR (RER below 1) but yields limited or mixed improvement overall; only Qwen2.5&#8209;Omni&#8209;3B improves on both tasks.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 06 LIMITATIONS -->
+  <section class="sec" id="limitations" aria-labelledby="h-limitations">
+    <div class="wrap">
+      <p class="sec__no">06</p>
+      <h2 class="sec__title" id="h-limitations">Limitations</h2>
+      <div class="prose">
+        <ul class="limits">
+          <li>Limited to inference&#8209;time evaluation of five open Speech LLMs on ASR and keyword spotting; findings may not generalize to conversational or reasoning&#8209;intensive speech tasks.</li>
+          <li>The 20 background recordings, while diverse, do not exhaust the full range of real&#8209;world acoustic environments.</li>
+          <li>Fairness analysis is limited to English accent subgroups and relies on the demographic annotations of the underlying datasets.</li>
+          <li>Descriptor&#8209;level analysis identifies statistical associations with degradation, not causal relationships between acoustic properties and model behavior.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- CITE -->
+  <section class="sec sec--cite" id="cite" aria-labelledby="h-cite">
+    <div class="wrap">
+      <p class="sec__no">&#167;</p>
+      <h2 class="sec__title" id="h-cite">Cite</h2>
+      <div class="cite-block">
+        <pre id="bibtex">@misc{dsouza2026aipspeech,
+  title  = {{AIP-Speech}: Auditing Speech LLM Robustness to Background Interference},
+  author = {Dsouza, Aiden and Mishra, Shreyansh and Suneja, Yashraj and Swain, Rohan and Borkar, Samyak and Jaishankar, Arjun and Urade, Tanmay},
+  year   = {2026},
+  howpublished = {\url{https://github.com/IvLabs/AIP-Speech}},
+  note   = {Preprint. Venue and arXiv identifier pending.}
+}</pre>
+        <button id="copy-bib" type="button">Copy BibTeX</button>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap">
+    <p>IvLabs, Visvesvaraya National Institute of Technology (VNIT) &middot; <a href="mailto:aiden.dsouza@ivlabs.in">aiden.dsouza@ivlabs.in</a> &middot; <a href="https://github.com/IvLabs/AIP-Speech">github.com/IvLabs/AIP-Speech</a></p>
+  </div>
+</footer>
+
+<script src="js/main.js"></script>
+</body>
+</html>
